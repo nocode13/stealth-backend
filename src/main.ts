@@ -1,8 +1,84 @@
 import { NestFactory } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
+import { ValidationPipe } from '@nestjs/common';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import session from 'express-session';
+import passport from 'passport';
+import connectPgSimple from 'connect-pg-simple';
 import { AppModule } from './app.module';
+import { AdminModule } from './admin/admin.module';
+import { MobileModule } from './mobile/mobile.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  await app.listen(process.env.PORT ?? 3000);
+  const config = app.get(ConfigService);
+  const isProd = config.get<string>('nodeEnv') === 'production';
+
+  // Валидация DTO глобально.
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
+  );
+
+  // CORS с поддержкой cookie (нужно для сессий админки).
+  app.enableCors({
+    origin: config.get<string[]>('corsOrigin'),
+    credentials: true,
+  });
+
+  // Сессии админки — хранение в Postgres (connect-pg-simple).
+  const PgStore = connectPgSimple(session);
+  app.use(
+    session({
+      store: new PgStore({
+        conString:
+          config.get<string>('database.url') ?? process.env.DATABASE_URL,
+        createTableIfMissing: true,
+      }),
+      secret: config.get<string>('session.secret')!,
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: isProd,
+        maxAge: 1000 * 60 * 60 * 24 * 7, // 7 дней
+      },
+    }),
+  );
+  app.use(passport.initialize());
+  app.use(passport.session());
+
+  // Swagger: отдельные спеки для админки и мобилки.
+  const adminDoc = SwaggerModule.createDocument(
+    app,
+    new DocumentBuilder()
+      .setTitle('Stealth — Admin API')
+      .setDescription('API админки (session, httpOnly cookie)')
+      .setVersion('0.1')
+      .addCookieAuth('connect.sid')
+      .build(),
+    { include: [AdminModule] },
+  );
+  SwaggerModule.setup('docs/admin', app, adminDoc);
+
+  const mobileDoc = SwaggerModule.createDocument(
+    app,
+    new DocumentBuilder()
+      .setTitle('Stealth — Mobile API')
+      .setDescription('API мобилки (JWT Bearer, access + refresh)')
+      .setVersion('0.1')
+      .addBearerAuth()
+      .build(),
+    { include: [MobileModule] },
+  );
+  SwaggerModule.setup('docs/mobile', app, mobileDoc);
+
+  const port = config.get<number>('port') ?? 3000;
+  await app.listen(port);
+  console.log(`🚀 http://localhost:${port} | docs: /docs/admin, /docs/mobile`);
 }
-bootstrap();
+void bootstrap();
