@@ -1,0 +1,137 @@
+// Prisma schema — платформа продажи цветов (marketplace-ready)
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN // управляет справочником и продавцами
+  SELLER // управляет своими листингами
+  CUSTOMER // покупатель (мобилка)
+}
+
+enum SellerStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+enum ListingStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+// Каналы доставки OTP-кода.
+enum OtpChannel {
+  SMS
+  EMAIL
+  TELEGRAM
+}
+
+model User {
+  id           String   @id @default(cuid())
+  // phone — обязательный якорь личности (phone-first вход по OTP).
+  phone        String   @unique
+  // email/telegramId — опциональные контакты, привязываются при OTP через свой канал.
+  email        String?  @unique
+  telegramId   String?  @unique
+  // passwordHash опционален: у OTP-пользователей пароля нет.
+  passwordHash String?
+  role         Role     @default(CUSTOMER)
+  // Продавец, к которому привязан пользователь (для роли SELLER).
+  sellerId     String?
+  seller       Seller?  @relation("SellerMembers", fields: [sellerId], references: [id], onDelete: SetNull)
+  // Продавец, которым владеет пользователь (owner). Обратная сторона Seller.owner.
+  ownedSeller  Seller?  @relation("SellerOwner")
+  refreshTokens RefreshToken[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("users")
+}
+
+// Одноразовые коды входа. Аккаунт идентифицируется по phone, channel — куда ушёл код.
+model OtpCode {
+  id          String     @id @default(cuid())
+  phone       String // аккаунт, который логинится
+  channel     OtpChannel
+  destination String // куда доставлен код: phone / email / telegramId
+  codeHash    String // sha256 от кода
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  attempts    Int        @default(0)
+  createdAt   DateTime   @default(now())
+
+  @@index([phone, channel])
+  @@map("otp_codes")
+}
+
+// Хранит хэш активного refresh-токена мобильной сессии (ротация при обновлении).
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String // sha256 от refresh-токена
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Seller {
+  id          String       @id @default(cuid())
+  name        String
+  status      SellerStatus @default(ACTIVE)
+  ownerUserId String       @unique
+  owner       User         @relation("SellerOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  members     User[]       @relation("SellerMembers")
+  listings    Listing[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@map("sellers")
+}
+
+// Справочник цветов — глобальный мастер-список, из которого продавцы создают листинги.
+model CatalogItem {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String    @unique
+  category    String
+  description String?
+  imageUrl    String?
+  unit        String    @default("шт") // единица измерения: шт, букет, упаковка...
+  listings    Listing[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("catalog_items")
+}
+
+// Предложение продавца поверх позиции справочника + инвентарь (остаток).
+model Listing {
+  id            String        @id @default(cuid())
+  sellerId      String
+  seller        Seller        @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  catalogItemId String
+  catalogItem   CatalogItem   @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
+  price         Decimal       @db.Decimal(12, 2)
+  currency      String        @default("UZS")
+  stock         Int           @default(0)
+  status        ListingStatus @default(DRAFT)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@unique([sellerId, catalogItemId])
+  @@index([status])
+  @@map("listings")
+}
