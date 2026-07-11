@@ -28,6 +28,14 @@ enum ListingStatus {
   ARCHIVED
 }
 
+// Статус ревью для категорий/позиций каталога, предложенных продавцом.
+// SUPER_ADMIN создаёт сразу APPROVED; SELLER — уходит в PENDING до апрува.
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 // Каналы доставки OTP-кода.
 enum OtpChannel {
   SMS
@@ -95,26 +103,62 @@ model Seller {
   owner       User         @relation("SellerOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
   members     User[]       @relation("SellerMembers")
   listings    Listing[]
+  categories    Category[]
+  catalogItems  CatalogItem[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
+  @@index([createdAt])
+  @@index([status])
   @@map("sellers")
 }
 
-// Справочник цветов — глобальный мастер-список, из которого продавцы создают листинги.
+// Категории каталога: master (sellerId = null, создаёт SUPER_ADMIN, сразу APPROVED)
+// и кастомные, предложенные продавцом (sellerId заполнен, уходят в PENDING до апрува
+// SUPER_ADMIN'ом и видны/доступны для использования только этому продавцу).
+model Category {
+  id           String       @id @default(cuid())
+  nameRu       String
+  nameUz       String?
+  nameEn       String?
+  nameKaa      String?
+  sellerId     String?
+  seller       Seller?      @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  status       ReviewStatus @default(APPROVED)
+  catalogItems CatalogItem[]
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([sellerId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("categories")
+}
+
+// Справочник цветов — master-список (sellerId = null, создаёт SUPER_ADMIN) плюс
+// кастомные позиции, предложенные продавцом (тот же паттерн ревью, что и Category).
 model CatalogItem {
-  id          String    @id @default(cuid())
+  id          String       @id @default(cuid())
   name        String
-  slug        String    @unique
-  category    String
+  slug        String
+  categoryId  String
+  category    Category     @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   description String?
   imageUrl    String?
-  unit        String    @default("шт") // единица измерения: шт, букет, упаковка...
+  unit        String       @default("шт") // единица измерения: шт, букет, упаковка...
+  sellerId    String?
+  seller      Seller?      @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  status      ReviewStatus @default(APPROVED)
   listings    Listing[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 
-  @@map("catalog_items")
+  @@unique([sellerId, slug])
+  @@index([sellerId])
+  @@index([status])
+  @@index([categoryId])
+  @@index([createdAt])
+  @@map("catalog")
 }
 
 // Предложение продавца поверх позиции справочника + инвентарь (остаток).
@@ -133,5 +177,7 @@ model Listing {
 
   @@unique([sellerId, catalogItemId])
   @@index([status])
+  @@index([catalogItemId])
+  @@index([createdAt])
   @@map("listings")
 }

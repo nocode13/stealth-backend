@@ -91,11 +91,10 @@ export class OtpService {
       throw new UnauthorizedException('Неверный код');
     }
 
-    await this.prisma.otpCode.update({
-      where: { id: otp.id },
-      data: { consumedAt: new Date() },
-    });
-    return { destination: otp.destination };
+    // Успешный вход — сносим все коды аккаунта (в т.ч. по другим каналам).
+    const { destination } = otp;
+    await this.prisma.otpCode.deleteMany({ where: { phone } });
+    return { destination };
   }
 
   // Куда доставлять код: sms → сам телефон, email → email, telegram → telegramId.

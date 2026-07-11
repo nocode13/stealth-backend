@@ -1,4 +1,11 @@
-import { PrismaClient, Role, ListingStatus, CatalogItem } from '@prisma/client';
+import {
+  PrismaClient,
+  Role,
+  ListingStatus,
+  ReviewStatus,
+  CatalogItem,
+  Category,
+} from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
@@ -45,23 +52,51 @@ async function main() {
     data: { sellerId: seller.id },
   });
 
-  // Справочник цветов.
+  // Master-категории (создаёт SUPER_ADMIN, сразу APPROVED).
+  const categorySeed = [
+    { nameRu: 'Розы', nameUz: 'Atirgullar', nameEn: 'Roses' },
+    { nameRu: 'Тюльпаны', nameUz: 'Lolalar', nameEn: 'Tulips' },
+    { nameRu: 'Пионы', nameUz: 'Piyonlar', nameEn: 'Peonies' },
+    { nameRu: 'Хризантемы', nameUz: 'Xrizantemalar', nameEn: 'Chrysanthemums' },
+  ];
+
+  const categories: Category[] = [];
+  for (const category of categorySeed) {
+    const existing = await prisma.category.findFirst({
+      where: { nameRu: category.nameRu, sellerId: null },
+    });
+    categories.push(
+      existing ??
+        (await prisma.category.create({
+          data: { ...category, sellerId: null, status: ReviewStatus.APPROVED },
+        })),
+    );
+  }
+  const [roses, tulips, peonies, chrysanthemums] = categories;
+
+  // Справочник цветов (master, создаёт SUPER_ADMIN).
   const catalogSeed = [
-    { name: 'Красная роза', slug: 'red-rose', category: 'Розы' },
-    { name: 'Белая роза', slug: 'white-rose', category: 'Розы' },
-    { name: 'Тюльпан', slug: 'tulip', category: 'Тюльпаны' },
-    { name: 'Пион', slug: 'peony', category: 'Пионы' },
-    { name: 'Хризантема', slug: 'chrysanthemum', category: 'Хризантемы' },
+    { name: 'Красная роза', slug: 'red-rose', categoryId: roses.id },
+    { name: 'Белая роза', slug: 'white-rose', categoryId: roses.id },
+    { name: 'Тюльпан', slug: 'tulip', categoryId: tulips.id },
+    { name: 'Пион', slug: 'peony', categoryId: peonies.id },
+    {
+      name: 'Хризантема',
+      slug: 'chrysanthemum',
+      categoryId: chrysanthemums.id,
+    },
   ];
 
   const catalogItems: CatalogItem[] = [];
   for (const item of catalogSeed) {
+    const existing = await prisma.catalogItem.findFirst({
+      where: { slug: item.slug, sellerId: null },
+    });
     catalogItems.push(
-      await prisma.catalogItem.upsert({
-        where: { slug: item.slug },
-        update: {},
-        create: item,
-      }),
+      existing ??
+        (await prisma.catalogItem.create({
+          data: { ...item, sellerId: null, status: ReviewStatus.APPROVED },
+        })),
     );
   }
 
@@ -103,6 +138,7 @@ async function main() {
   console.log('Seed complete:', {
     admin: admin.email,
     seller: seller.name,
+    categories: categories.length,
     catalogItems: catalogItems.length,
   });
 }

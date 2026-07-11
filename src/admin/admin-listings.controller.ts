@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -19,6 +20,7 @@ import type { AuthUser } from '../common/decorators/current-user.decorator';
 import { ListingsService } from '../listings/listings.service';
 import {
   CreateListingDto,
+  FindListingsQueryDto,
   UpdateListingDto,
 } from '../listings/dto/listing.dto';
 
@@ -41,8 +43,8 @@ export class AdminListingsController {
 
   @Get()
   @ApiOperation({ summary: 'Мои листинги' })
-  findAll(@CurrentUser() user: AuthUser) {
-    return this.listings.findForSeller(this.sellerId(user));
+  findAll(@Query() query: FindListingsQueryDto, @CurrentUser() user: AuthUser) {
+    return this.listings.findForSeller(this.sellerId(user), query);
   }
 
   @Get(':id')

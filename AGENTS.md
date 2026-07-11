@@ -12,10 +12,16 @@ Backend (NestJS) для платформы продажи цветов и инв
 - **Prisma 6** — ORM (`prisma/schema.prisma`, `prisma/migrations/`, `prisma/seed.ts`).
   - ⚠️ Намеренно зафиксирована v6: Prisma 7 требует driver-адаптеры и
     `prisma.config.ts`. Не апгрейдить до v7 без миграции конфига.
-  - Схема ведётся через **миграции** (`prisma migrate`). Начальная миграция `0_init`
-    забаселайнена (помечена applied) на существующей БД. Файлы миграций коммитятся в git.
+  - Схема ведётся через **миграции** (`prisma migrate`). Файлы миграций коммитятся в git.
+  - ⚠️ `prisma migrate dev` детектит drift из-за таблицы `session` (создаётся
+    `connect-pg-simple` вне Prisma, см. «Аутентификация»). Если он просит `migrate reset`,
+    не соглашайтесь на нём вслепую (потеря данных) — либо пишите миграцию руками
+    и накатывайте через `prisma migrate deploy`, либо временно убирайте `session`
+    из БД перед генерацией.
 - **Passport** — аутентификация: JWT+refresh и OTP (мобилка), session (админка).
 - **nodemailer** — отправка email (Gmail SMTP) для OTP-канала EMAIL.
+- **MinIO** (S3-совместимое хранилище, `docker-compose.yml`) — фото каталога,
+  через `@aws-sdk/client-s3` (`src/storage/`). На проде — тот же код, другой S3-провайдер.
 - **@nestjs/swagger** — две отдельные спеки.
 
 ## Как запустить
@@ -23,9 +29,9 @@ Backend (NestJS) для платформы продажи цветов и инв
 ```bash
 pnpm install
 cp .env.example .env          # секреты уже с дефолтами для локалки
-pnpm db:up                    # поднять Postgres в docker
+pnpm db:up                    # поднять Postgres + MinIO в docker
 pnpm db:migrate               # применить миграции (prisma migrate dev)
-pnpm db:seed                  # засидить админа, продавца, справочник
+pnpm db:seed                  # засидить админа, продавца, категории, справочник
 pnpm start:dev                # запуск с watch
 ```
 
@@ -35,9 +41,12 @@ pnpm start:dev                # запуск с watch
 - Swagger: `http://localhost:3000/docs/admin` и `/docs/mobile`.
 - Health: `GET /health`.
 - Adminer (UI для БД): `http://localhost:8080` (сервер `postgres`, БД/юзер/пароль `stealth`).
+- MinIO: S3 API `http://localhost:9000`, консоль `http://localhost:9001`
+  (`stealth`/`stealth123`), бакет `catalog` создаётся автоматически (`minio-init`
+  в `docker-compose.yml`, публичное чтение).
 
 Сид-пользователи (пароль у всех `password123`, у каждого есть `phone`):
-- `admin@stealth.local` / `+998900000001` — `SUPER_ADMIN` (справочник и продавцы);
+- `admin@stealth.local` / `+998900000001` — `SUPER_ADMIN` (справочник, категории, продавцы);
 - `seller@stealth.local` / `+998900000002` — `SELLER` (владелец «Первый цветочный»).
 
 ## Скрипты
@@ -68,8 +77,10 @@ src/
   otp/             # OtpService + подключаемые каналы доставки кода (channels/)
   users/           # UsersService (поиск/создание/привязка контактов/пароль)
   sellers/         # SellersService (продавцы = арендаторы)
-  catalog/         # CatalogService — справочник цветов (глобальный мастер-список)
+  categories/      # CategoriesService — категории (master + предложенные продавцом)
+  catalog/         # CatalogService — справочник цветов (master + предложенный продавцом)
   listings/        # ListingsService — предложения продавца + остаток
+  storage/         # StorageService — S3-совместимое хранилище (фото каталога)
   admin/           # API-поверхность админки (session-guard'ы)
   mobile/          # API-поверхность мобилки (JWT-guard'ы)
 ```
@@ -80,11 +91,25 @@ src/
   (nullable unique, привязываются при OTP через свой канал), `passwordHash?` (nullable — у
   OTP-юзеров пароля нет), `role` (`SUPER_ADMIN | SELLER | CUSTOMER`), опциональный `sellerId`.
 - **Seller** — продавец (арендатор). Пока одна запись, но модель мультипродавца.
-- **CatalogItem** — **справочник цветов**: глобальный мастер-список, из которого
-  продавцы создают листинги. Управляется `SUPER_ADMIN`. Так новые продавцы
-  выбирают из общего справочника, а не плодят дубликаты.
+- **Category** и **CatalogItem** — общий паттерн владения/ревью:
+  - `sellerId = null` → **master**-запись, создаёт только `SUPER_ADMIN`, сразу `status: APPROVED`.
+  - `sellerId` заполнен → продавец предложил свою (категорию или позицию каталога),
+    уходит в `status: PENDING` до апрува `SUPER_ADMIN`'ом (`PATCH …/:id/status`).
+    После апрува видна и доступна **только этому продавцу** (наряду с master),
+    остальным продавцам — не видна и недоступна для выбора/листинга.
+  - На витрине мобилки (`/mobile/categories`, `/mobile/catalog`, `/mobile/listings`)
+    видны **все** `APPROVED`-записи независимо от `sellerId` — ограничение
+    «видно только этому продавцу» касается **создания/выбора**, не показа покупателю.
+  - `Category` — мультиязычные названия `nameRu` (обязательное, фолбэк), `nameUz?/nameEn?/nameKaa?`.
+  - `CatalogItem` — `categoryId` (связь с `Category`), `imageUrl` (S3-ссылка, см.
+    `POST /admin/catalog/:id/image`), `slug` уникален в рамках `sellerId`
+    (партиционный unique-индекс защищает master-scope, `sellerId IS NULL`, от дублей —
+    Prisma не умеет декларировать partial-индексы, он есть только в SQL миграции).
+  - Общий enum `ReviewStatus { PENDING APPROVED REJECTED }`.
 - **Listing** — предложение продавца поверх позиции справочника: `price`,
   `currency`, `stock` (инвентарь), `status`. Уникальность `(sellerId, catalogItemId)`.
+  При создании листинга `ListingsService` проверяет через `CatalogService.assertUsable`,
+  что `catalogItemId` одобрен и виден продавцу (master `APPROVED` либо его собственный).
 - **RefreshToken** — хэши активных refresh-токенов мобилки (для ротации/отзыва).
 - **OtpCode** — одноразовые коды входа: `phone` (аккаунт), `channel`, `destination`,
   `codeHash` (sha256), `expiresAt`, `consumedAt?`, `attempts`. Enum `OtpChannel { SMS EMAIL TELEGRAM }`.
@@ -129,9 +154,23 @@ src/
 
 ### Авторизация по ролям
 `RolesGuard` + `@Roles(...)` (ставить ПОСЛЕ guard'а аутентификации):
-- `SUPER_ADMIN` — справочник (`/admin/catalog`), продавцы (`/admin/sellers`);
-- `SELLER` — свои листинги (`/admin/listings`, sellerId берётся из пользователя);
+- `SUPER_ADMIN` — категории и справочник (`/admin/categories`, `/admin/catalog`) без
+  ограничений, апрув/реджект чужих предложений (`PATCH …/:id/status`), продавцы (`/admin/sellers`);
+- `SELLER` — тоже имеет доступ к `/admin/categories` и `/admin/catalog` (создание
+  своих + просмотр master `APPROVED`), но `PATCH …/:id/status` — только `SUPER_ADMIN`
+  (переопределяется на уровне хендлера через `@Roles` — `getAllAndOverride` берёт
+  роли хендлера, а не класса). Свои листинги — `/admin/listings`
+  (sellerId берётся из пользователя);
 - `CUSTOMER` — витрина мобилки.
+
+### Хранилище фото (`src/storage/`)
+- `StorageService` — S3-совместимый клиент (`@aws-sdk/client-s3`, `forcePathStyle: true`).
+  Локально — **MinIO** (`docker-compose.yml`, бакет `catalog`, публичное чтение).
+  На проде меняются только env (`S3_*`), код не трогаем.
+- `POST /admin/catalog/:id/image` (multipart, поле `file`, `FileInterceptor` с
+  `memoryStorage`, лимит 5MB, только `image/*`) — загружает в S3 и обновляет
+  `CatalogItem.imageUrl`. Владелец-проверка: `SELLER` может грузить фото только
+  для своих позиций.
 
 ## Конвенции
 
@@ -151,7 +190,10 @@ src/
 
 Мобильный флоу и админский session-флоу проверяются curl'ом (см. README/историю
 коммитов). Ключевые инварианты: витрина без токена → 401; старый refresh после
-ротации → 401; `SELLER` пишет в справочник → 403; сессии появляются в таблице
-`session` Postgres.
+ротации → 401; сессии появляются в таблице `session` Postgres; `SELLER`, создавая
+категорию/позицию каталога, получает `status: PENDING`, а `SUPER_ADMIN` — сразу
+`APPROVED`; второй `SELLER` не видит и не может использовать чужую кастомную
+категорию/позицию (403 при попытке сослаться на чужой `categoryId`/`catalogItemId`
+в листинге).
 
 > `AGENTS.md` — копия этого файла. При изменениях правьте оба (или синхронизируйте).

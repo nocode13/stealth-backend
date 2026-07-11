@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { ListingStatus } from '@prisma/client';
+import { Type } from 'class-transformer';
 import {
   IsEnum,
   IsInt,
@@ -8,6 +9,7 @@ import {
   IsString,
   Min,
 } from 'class-validator';
+import { CursorPaginationDto } from '../../common/dto/pagination.dto';
 
 export class CreateListingDto {
   @ApiProperty({ description: 'ID позиции справочника' })
@@ -36,3 +38,35 @@ export class CreateListingDto {
 }
 
 export class UpdateListingDto extends PartialType(CreateListingDto) {}
+
+export class FindListingsQueryDto extends CursorPaginationDto {
+  @ApiPropertyOptional({ description: 'Поиск по названию позиции справочника' })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Фильтр по категории' })
+  @IsOptional()
+  @IsString()
+  categoryId?: string;
+
+  // Только для «моих листингов» (админка) — на витрине статус фиксирован (ACTIVE).
+  @ApiPropertyOptional({ enum: ListingStatus })
+  @IsOptional()
+  @IsEnum(ListingStatus)
+  status?: ListingStatus;
+
+  @ApiPropertyOptional({ example: 10000 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  minPrice?: number;
+
+  @ApiPropertyOptional({ example: 100000 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  maxPrice?: number;
+}

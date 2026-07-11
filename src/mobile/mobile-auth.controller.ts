@@ -10,13 +10,13 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthService } from '../auth/auth.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { LoginDto, RefreshDto, RegisterDto } from '../auth/dto/auth.dto';
+import { RefreshDto } from '../auth/dto/auth.dto';
 import { OtpService } from '../otp/otp.service';
 import { RequestOtpDto, VerifyOtpDto } from '../otp/dto/otp.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
 
-// Аутентификация мобилки: OTP (phone-first) + пароль, access + refresh токены.
+// Аутентификация мобилки: OTP (phone-first, passwordless), access + refresh токены.
 @ApiTags('mobile/auth')
 @Controller('mobile/auth')
 export class MobileAuthController {
@@ -48,20 +48,6 @@ export class MobileAuthController {
     return this.auth.loginWithOtp(dto.phone, dto.channel, destination);
   }
 
-  @Post('register')
-  @ApiOperation({ summary: 'Регистрация по паролю (phone обязателен)' })
-  register(@Body() dto: RegisterDto) {
-    return this.auth.registerCustomer(dto.phone, dto.password, dto.email);
-  }
-
-  @Post('login')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Вход, возвращает access + refresh токены' })
-  async login(@Body() dto: LoginDto) {
-    const user = await this.auth.validateCredentials(dto.email, dto.password);
-    return this.auth.issueTokens(user.id);
-  }
-
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -75,7 +61,10 @@ export class MobileAuthController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Текущий пользователь мобилки' })
-  me(@CurrentUser() user: AuthUser): AuthUser {
+  async me(@CurrentUser() user: AuthUser) {
+    await new Promise((res) => {
+      setTimeout(res, 2000);
+    });
     return user;
   }
 

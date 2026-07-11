@@ -1,6 +1,3 @@
--- CreateSchema
-CREATE SCHEMA IF NOT EXISTS "public";
-
 -- CreateEnum
 CREATE TYPE "Role" AS ENUM ('SUPER_ADMIN', 'SELLER', 'CUSTOMER');
 
@@ -9,6 +6,9 @@ CREATE TYPE "SellerStatus" AS ENUM ('PENDING', 'ACTIVE', 'SUSPENDED');
 
 -- CreateEnum
 CREATE TYPE "ListingStatus" AS ENUM ('DRAFT', 'ACTIVE', 'ARCHIVED');
+
+-- CreateEnum
+CREATE TYPE "ReviewStatus" AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 
 -- CreateEnum
 CREATE TYPE "OtpChannel" AS ENUM ('SMS', 'EMAIL', 'TELEGRAM');
@@ -68,18 +68,35 @@ CREATE TABLE "sellers" (
 );
 
 -- CreateTable
-CREATE TABLE "catalog_items" (
+CREATE TABLE "categories" (
     "id" TEXT NOT NULL,
-    "name" TEXT NOT NULL,
-    "slug" TEXT NOT NULL,
-    "category" TEXT NOT NULL,
-    "description" TEXT,
-    "imageUrl" TEXT,
-    "unit" TEXT NOT NULL DEFAULT 'шт',
+    "nameRu" TEXT NOT NULL,
+    "nameUz" TEXT,
+    "nameEn" TEXT,
+    "nameKaa" TEXT,
+    "sellerId" TEXT,
+    "status" "ReviewStatus" NOT NULL DEFAULT 'APPROVED',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
-    CONSTRAINT "catalog_items_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "categories_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "catalog" (
+    "id" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "slug" TEXT NOT NULL,
+    "categoryId" TEXT NOT NULL,
+    "description" TEXT,
+    "imageUrl" TEXT,
+    "unit" TEXT NOT NULL DEFAULT 'шт',
+    "sellerId" TEXT,
+    "status" "ReviewStatus" NOT NULL DEFAULT 'APPROVED',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "catalog_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -116,7 +133,19 @@ CREATE INDEX "refresh_tokens_userId_idx" ON "refresh_tokens"("userId");
 CREATE UNIQUE INDEX "sellers_ownerUserId_key" ON "sellers"("ownerUserId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "catalog_items_slug_key" ON "catalog_items"("slug");
+CREATE INDEX "categories_sellerId_idx" ON "categories"("sellerId");
+
+-- CreateIndex
+CREATE INDEX "categories_status_idx" ON "categories"("status");
+
+-- CreateIndex
+CREATE INDEX "catalog_sellerId_idx" ON "catalog"("sellerId");
+
+-- CreateIndex
+CREATE INDEX "catalog_status_idx" ON "catalog"("status");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "catalog_sellerId_slug_key" ON "catalog"("sellerId", "slug");
 
 -- CreateIndex
 CREATE INDEX "listings_status_idx" ON "listings"("status");
@@ -134,8 +163,16 @@ ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_userId_fkey" FOREIGN
 ALTER TABLE "sellers" ADD CONSTRAINT "sellers_ownerUserId_fkey" FOREIGN KEY ("ownerUserId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "categories" ADD CONSTRAINT "categories_sellerId_fkey" FOREIGN KEY ("sellerId") REFERENCES "sellers"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "catalog" ADD CONSTRAINT "catalog_categoryId_fkey" FOREIGN KEY ("categoryId") REFERENCES "categories"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "catalog" ADD CONSTRAINT "catalog_sellerId_fkey" FOREIGN KEY ("sellerId") REFERENCES "sellers"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "listings" ADD CONSTRAINT "listings_sellerId_fkey" FOREIGN KEY ("sellerId") REFERENCES "sellers"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "listings" ADD CONSTRAINT "listings_catalogItemId_fkey" FOREIGN KEY ("catalogItemId") REFERENCES "catalog_items"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
+ALTER TABLE "listings" ADD CONSTRAINT "listings_catalogItemId_fkey" FOREIGN KEY ("catalogItemId") REFERENCES "catalog"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

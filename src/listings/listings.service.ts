@@ -5,38 +5,83 @@ import {
 } from '@nestjs/common';
 import { Listing, ListingStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateListingDto, UpdateListingDto } from './dto/listing.dto';
+import { CursorPage, toCursorPage } from '../common/pagination';
+import { CatalogService } from '../catalog/catalog.service';
+import {
+  CreateListingDto,
+  FindListingsQueryDto,
+  UpdateListingDto,
+} from './dto/listing.dto';
 
 const withCatalog = {
-  catalogItem: true,
+  catalogItem: { include: { category: true } },
 } satisfies Prisma.ListingInclude;
+
+function buildPriceFilter(
+  minPrice?: number,
+  maxPrice?: number,
+): Prisma.DecimalFilter | undefined {
+  if (minPrice === undefined && maxPrice === undefined) return undefined;
+  return { gte: minPrice, lte: maxPrice };
+}
 
 @Injectable()
 export class ListingsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly catalog: CatalogService,
+  ) {}
 
-  // Витрина мобилки: только активные листинги.
-  findStorefront(search?: string): Promise<Listing[]> {
-    return this.prisma.listing.findMany({
+  // Витрина мобилки: только активные листинги. status из query игнорируется — тут
+  // всегда ACTIVE + остаток > 0.
+  async findStorefront(
+    query: FindListingsQueryDto,
+  ): Promise<CursorPage<Listing>> {
+    const rows = await this.prisma.listing.findMany({
       where: {
         status: ListingStatus.ACTIVE,
         stock: { gt: 0 },
-        catalogItem: search
-          ? { name: { contains: search, mode: 'insensitive' } }
-          : undefined,
+        price: buildPriceFilter(query.minPrice, query.maxPrice),
+        catalogItem: {
+          categoryId: query.categoryId,
+          name: query.search
+            ? { contains: query.search, mode: 'insensitive' }
+            : undefined,
+        },
       },
       include: withCatalog,
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      cursor: query.cursor ? { id: query.cursor } : undefined,
+      skip: query.cursor ? 1 : 0,
+      take: query.limit + 1,
     });
+    return toCursorPage(rows, query.limit);
   }
 
   // Листинги конкретного продавца (админка).
-  findForSeller(sellerId: string): Promise<Listing[]> {
-    return this.prisma.listing.findMany({
-      where: { sellerId },
+  async findForSeller(
+    sellerId: string,
+    query: FindListingsQueryDto,
+  ): Promise<CursorPage<Listing>> {
+    const rows = await this.prisma.listing.findMany({
+      where: {
+        sellerId,
+        status: query.status,
+        price: buildPriceFilter(query.minPrice, query.maxPrice),
+        catalogItem: {
+          categoryId: query.categoryId,
+          name: query.search
+            ? { contains: query.search, mode: 'insensitive' }
+            : undefined,
+        },
+      },
       include: withCatalog,
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      cursor: query.cursor ? { id: query.cursor } : undefined,
+      skip: query.cursor ? 1 : 0,
+      take: query.limit + 1,
     });
+    return toCursorPage(rows, query.limit);
   }
 
   async findOneForSeller(id: string, sellerId: string): Promise<Listing> {
@@ -51,7 +96,8 @@ export class ListingsService {
     return listing;
   }
 
-  create(sellerId: string, dto: CreateListingDto): Promise<Listing> {
+  async create(sellerId: string, dto: CreateListingDto): Promise<Listing> {
+    await this.catalog.assertUsable(dto.catalogItemId, sellerId);
     return this.prisma.listing.create({
       data: { ...dto, sellerId },
       include: withCatalog,

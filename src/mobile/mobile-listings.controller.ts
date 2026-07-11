@@ -2,6 +2,7 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ListingsService } from '../listings/listings.service';
+import { FindListingsQueryDto } from '../listings/dto/listing.dto';
 
 // Витрина мобилки: активные листинги с остатком.
 @ApiTags('mobile/listings')
@@ -13,7 +14,7 @@ export class MobileListingsController {
 
   @Get()
   @ApiOperation({ summary: 'Активные предложения (витрина)' })
-  findAll(@Query('search') search?: string) {
-    return this.listings.findStorefront(search);
+  findAll(@Query() query: FindListingsQueryDto) {
+    return this.listings.findStorefront(query);
   }
 }

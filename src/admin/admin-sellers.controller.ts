@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Role, SellerStatus } from '@prisma/client';
 import { IsEnum } from 'class-validator';
@@ -6,6 +14,7 @@ import { AuthenticatedGuard } from '../auth/guards/authenticated.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { SellersService } from '../sellers/sellers.service';
+import { FindSellersQueryDto } from '../sellers/dto/seller.dto';
 
 class UpdateSellerStatusDto {
   @IsEnum(SellerStatus)
@@ -23,8 +32,8 @@ export class AdminSellersController {
 
   @Get()
   @ApiOperation({ summary: 'Список продавцов' })
-  findAll() {
-    return this.sellers.findAll();
+  findAll(@Query() query: FindSellersQueryDto) {
+    return this.sellers.findAll(query);
   }
 
   @Get(':id')

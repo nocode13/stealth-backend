@@ -3,49 +3,46 @@ import { ReviewStatus } from '@prisma/client';
 import { IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
 import { CursorPaginationDto } from '../../common/dto/pagination.dto';
 
-export class CreateCatalogItemDto {
-  @ApiProperty({ example: 'Красная роза' })
+export class CreateCategoryDto {
+  @ApiProperty({ example: 'Розы' })
   @IsString()
   @MinLength(2)
-  name: string;
+  nameRu: string;
 
-  @ApiProperty({ example: 'red-rose' })
-  @IsString()
-  @MinLength(2)
-  slug: string;
-
-  @ApiProperty({ description: 'ID категории' })
-  @IsString()
-  categoryId: string;
-
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'Atirgullar' })
   @IsOptional()
   @IsString()
-  description?: string;
+  nameUz?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'Roses' })
   @IsOptional()
   @IsString()
-  imageUrl?: string;
+  nameEn?: string;
 
-  @ApiPropertyOptional({ example: 'шт', default: 'шт' })
+  @ApiPropertyOptional({ example: 'Atirgúller' })
   @IsOptional()
   @IsString()
-  unit?: string;
+  nameKaa?: string;
 }
 
-export class UpdateCatalogItemDto extends PartialType(CreateCatalogItemDto) {}
+export class UpdateCategoryDto extends PartialType(CreateCategoryDto) {
+  @ApiPropertyOptional({ enum: ReviewStatus })
+  @IsOptional()
+  @IsEnum(ReviewStatus)
+  status?: ReviewStatus;
+}
 
-export class FindCatalogQueryDto extends CursorPaginationDto {
-  @ApiPropertyOptional({ description: 'Поиск по названию' })
+export class UpdateCategoryStatusDto {
+  @ApiProperty({ enum: ReviewStatus })
+  @IsEnum(ReviewStatus)
+  status: ReviewStatus;
+}
+
+export class FindCategoriesQueryDto extends CursorPaginationDto {
+  @ApiPropertyOptional({ description: 'Поиск по названию (все локали)' })
   @IsOptional()
   @IsString()
   search?: string;
-
-  @ApiPropertyOptional({ description: 'Фильтр по категории' })
-  @IsOptional()
-  @IsString()
-  categoryId?: string;
 
   // Только для SUPER_ADMIN — для SELLER игнорируется (видимость считается отдельно).
   @ApiPropertyOptional({ enum: ReviewStatus })

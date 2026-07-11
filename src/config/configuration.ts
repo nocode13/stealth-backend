@@ -34,6 +34,14 @@ export const envValidationSchema = Joi.object({
   TELEGRAM_BOT_TOKEN: Joi.string().allow('').optional(),
   SMS_PROVIDER: Joi.string().allow('').optional(),
   SMS_API_KEY: Joi.string().allow('').optional(),
+
+  // S3-совместимое хранилище фото (локально — MinIO из docker-compose).
+  S3_ENDPOINT: Joi.string().required(),
+  S3_REGION: Joi.string().default('us-east-1'),
+  S3_BUCKET: Joi.string().default('catalog'),
+  S3_ACCESS_KEY: Joi.string().required(),
+  S3_SECRET_KEY: Joi.string().required(),
+  S3_PUBLIC_URL: Joi.string().required(),
 });
 
 // Типизированный доступ к конфигу через ConfigService.
@@ -75,5 +83,13 @@ export default () => ({
   sms: {
     provider: process.env.SMS_PROVIDER,
     apiKey: process.env.SMS_API_KEY,
+  },
+  s3: {
+    endpoint: process.env.S3_ENDPOINT,
+    region: process.env.S3_REGION ?? 'us-east-1',
+    bucket: process.env.S3_BUCKET ?? 'catalog',
+    accessKey: process.env.S3_ACCESS_KEY,
+    secretKey: process.env.S3_SECRET_KEY,
+    publicUrl: process.env.S3_PUBLIC_URL,
   },
 });

@@ -1,7 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { OtpChannel, Role, User } from '@prisma/client';
+import { OtpChannel, User } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
@@ -42,27 +42,6 @@ export class AuthService {
       throw new UnauthorizedException('Неверный email или пароль');
     }
     return this.toAuthUser(user);
-  }
-
-  // Регистрация покупателя из мобилки (по паролю; phone обязателен).
-  async registerCustomer(
-    phone: string,
-    password: string,
-    email?: string,
-  ): Promise<TokenPair> {
-    const existing = await this.users.findByPhone(phone);
-    if (existing) {
-      throw new UnauthorizedException(
-        'Пользователь с таким телефоном уже существует',
-      );
-    }
-    const user = await this.users.create({
-      phone,
-      email,
-      password,
-      role: Role.CUSTOMER,
-    });
-    return this.issueTokens(user.id);
   }
 
   // Passwordless-вход по OTP: find-or-create по телефону, привязка контакта, токены.
