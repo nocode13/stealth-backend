@@ -1,14 +1,11 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { Controller, Get, Param, Query } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ListingsService } from '../listings/listings.service';
 import { FindListingsQueryDto } from '../listings/dto/listing.dto';
 
-// Витрина мобилки: активные листинги с остатком.
+// Витрина мобилки: активные листинги с остатком. Публичный эндпоинт — доступен без авторизации.
 @ApiTags('mobile/listings')
-@ApiBearerAuth()
 @Controller('mobile/listings')
-@UseGuards(JwtAuthGuard)
 export class MobileListingsController {
   constructor(private readonly listings: ListingsService) {}
 
@@ -16,5 +13,11 @@ export class MobileListingsController {
   @ApiOperation({ summary: 'Активные предложения (витрина)' })
   findAll(@Query() query: FindListingsQueryDto) {
     return this.listings.findStorefront(query);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Одно активное предложение (карточка товара)' })
+  findOne(@Param('id') id: string) {
+    return this.listings.findOnePublic(id);
   }
 }

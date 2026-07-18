@@ -58,6 +58,16 @@ export class ListingsService {
     return toCursorPage(rows, query.limit);
   }
 
+  // Одно активное предложение для витрины мобилки (карточка товара).
+  async findOnePublic(id: string): Promise<Listing> {
+    const listing = await this.prisma.listing.findFirst({
+      where: { id, status: ListingStatus.ACTIVE, stock: { gt: 0 } },
+      include: withCatalog,
+    });
+    if (!listing) throw new NotFoundException('Листинг не найден');
+    return listing;
+  }
+
   // Листинги конкретного продавца (админка).
   async findForSeller(
     sellerId: string,

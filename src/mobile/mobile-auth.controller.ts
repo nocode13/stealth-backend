@@ -61,10 +61,7 @@ export class MobileAuthController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Текущий пользователь мобилки' })
-  async me(@CurrentUser() user: AuthUser) {
-    await new Promise((res) => {
-      setTimeout(res, 2000);
-    });
+  me(@CurrentUser() user: AuthUser) {
     return user;
   }
 
