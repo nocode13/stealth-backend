@@ -52,6 +52,18 @@ async function main() {
     data: { sellerId: seller.id },
   });
 
+  // Тестовый покупатель — для ручного тестирования мобилки (корзина и т.п.).
+  const customer = await prisma.user.upsert({
+    where: { email: 'customer@stealth.local' },
+    update: {},
+    create: {
+      phone: '+998900000003',
+      email: 'customer@stealth.local',
+      passwordHash,
+      role: Role.CUSTOMER,
+    },
+  });
+
   // Master-категории (создаёт SUPER_ADMIN, сразу APPROVED).
   const categorySeed = [
     { nameRu: 'Розы', nameUz: 'Atirgullar', nameEn: 'Roses' },
@@ -289,6 +301,7 @@ async function main() {
   console.log('Seed complete:', {
     admin: admin.email,
     seller: seller.name,
+    customer: customer.email,
     categories: categories.length,
     catalogItems: catalogItems.length,
   });

@@ -4,10 +4,12 @@ import { OtpModule } from '../otp/otp.module';
 import { CategoriesModule } from '../categories/categories.module';
 import { CatalogModule } from '../catalog/catalog.module';
 import { ListingsModule } from '../listings/listings.module';
+import { CartModule } from '../cart/cart.module';
 import { MobileAuthController } from './mobile-auth.controller';
 import { MobileCategoriesController } from './mobile-categories.controller';
 import { MobileCatalogController } from './mobile-catalog.controller';
 import { MobileListingsController } from './mobile-listings.controller';
+import { MobileCartController } from './mobile-cart.controller';
 
 // API-поверхность мобилки. JWT-guard'ы + Swagger-теги, логика в доменных модулях.
 @Module({
@@ -17,12 +19,14 @@ import { MobileListingsController } from './mobile-listings.controller';
     CategoriesModule,
     CatalogModule,
     ListingsModule,
+    CartModule,
   ],
   controllers: [
     MobileAuthController,
     MobileCategoriesController,
     MobileCatalogController,
     MobileListingsController,
+    MobileCartController,
   ],
 })
 export class MobileModule {}

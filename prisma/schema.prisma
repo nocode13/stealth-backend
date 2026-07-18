@@ -59,6 +59,7 @@ model User {
   // Продавец, которым владеет пользователь (owner). Обратная сторона Seller.owner.
   ownedSeller  Seller?  @relation("SellerOwner")
   refreshTokens RefreshToken[]
+  cartItems    CartItem[]
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -175,9 +176,29 @@ model Listing {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
+  cartItems     CartItem[]
+
   @@unique([sellerId, catalogItemId])
   @@index([status])
   @@index([catalogItemId])
   @@index([createdAt])
   @@map("listings")
+}
+
+// Позиция в корзине покупателя. Отдельной обёртки Cart нет — у пользователя
+// неявно одна корзина, как RefreshToken висит прямо на User без "Session".
+model CartItem {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listingId String
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  quantity  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, listingId])
+  @@index([userId])
+  @@index([listingId])
+  @@map("cart_items")
 }
