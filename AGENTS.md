@@ -18,8 +18,8 @@ Backend (NestJS) для платформы продажи цветов и инв
     не соглашайтесь на нём вслепую (потеря данных) — либо пишите миграцию руками
     и накатывайте через `prisma migrate deploy`, либо временно убирайте `session`
     из БД перед генерацией.
-- **Passport** — аутентификация: JWT+refresh и OTP (мобилка), session (админка).
-- **nodemailer** — отправка email (Gmail SMTP) для OTP-канала EMAIL.
+- **Passport** — аутентификация: JWT+refresh (мобилка), session (админка).
+- **grammy** — Telegram-бот: единственный способ входа в мобилку (`src/telegram/`).
 - **MinIO** (S3-совместимое хранилище, `docker-compose.yml`) — фото каталога,
   через `@aws-sdk/client-s3` (`src/storage/`). На проде — тот же код, другой S3-провайдер.
 - **@nestjs/swagger** — две отдельные спеки.
@@ -45,7 +45,8 @@ pnpm start:dev                # запуск с watch
   (`stealth`/`stealth123`), бакет `catalog` создаётся автоматически (`minio-init`
   в `docker-compose.yml`, публичное чтение).
 
-Сид-пользователи (пароль у всех `password123`, у каждого есть `phone`):
+Сид-пользователи админки (пароль у всех `password123`, `phone` заполнен — но у юзеров
+мобилки его может не быть, вход туда идёт по `telegramId`):
 - `admin@stealth.local` / `+998900000001` — `SUPER_ADMIN` (справочник, категории, продавцы);
 - `seller@stealth.local` / `+998900000002` — `SELLER` (владелец «Первый цветочный»).
 
@@ -74,8 +75,8 @@ src/
   prisma/          # @Global PrismaModule + PrismaService
   common/          # @Roles(), @CurrentUser(), RolesGuard
   auth/            # AuthService, стратегии, guard'ы (см. «Аутентификация»)
-  otp/             # OtpService + подключаемые каналы доставки кода (channels/)
-  users/           # UsersService (поиск/создание/привязка контактов/пароль)
+  telegram/        # Бот (grammy), сессии входа по nonce, валидация Mini App initData
+  users/           # UsersService (поиск/создание/профиль/пароль)
   sellers/         # SellersService (продавцы = арендаторы)
   categories/      # CategoriesService — категории (master + предложенные продавцом)
   catalog/         # CatalogService — справочник цветов (master + предложенный продавцом)
@@ -87,9 +88,11 @@ src/
 
 ### Доменная модель (`prisma/schema.prisma`)
 
-- **User** — `phone` (**обязательный, unique** — якорь личности), `email?`/`telegramId?`
-  (nullable unique, привязываются при OTP через свой канал), `passwordHash?` (nullable — у
-  OTP-юзеров пароля нет), `role` (`SUPER_ADMIN | SELLER | CUSTOMER`), опциональный `sellerId`.
+- **User** — `telegramId?` (nullable unique) — **якорь личности мобилки**: вход только через
+  Telegram-бота. `phone?`/`email?` (nullable unique) и `name?` — **опциональные профильные
+  поля**, юзер дозаполняет их сам через `PATCH /mobile/auth/me`; обязательными станут на этапе
+  заказов (модели `Order` пока нет). `passwordHash?` (nullable — есть только у админов),
+  `role` (`SUPER_ADMIN | SELLER | CUSTOMER`), опциональный `sellerId`.
 - **Seller** — продавец (арендатор). Пока одна запись, но модель мультипродавца.
 - **Category** и **CatalogItem** — общий паттерн владения/ревью:
   - `sellerId = null` → **master**-запись, создаёт только `SUPER_ADMIN`, сразу `status: APPROVED`.
@@ -111,37 +114,50 @@ src/
   При создании листинга `ListingsService` проверяет через `CatalogService.assertUsable`,
   что `catalogItemId` одобрен и виден продавцу (master `APPROVED` либо его собственный).
 - **RefreshToken** — хэши активных refresh-токенов мобилки (для ротации/отзыва).
-- **OtpCode** — одноразовые коды входа: `phone` (аккаунт), `channel`, `destination`,
-  `codeHash` (sha256), `expiresAt`, `consumedAt?`, `attempts`. Enum `OtpChannel { SMS EMAIL TELEGRAM }`.
+- **TelegramAuthSession** — короткоживущая сессия входа: `nonce` (unique), `telegramId?`/`userId?`
+  (проставляет бот на `/start`), `consumedAt?`, `expiresAt`. Токены в ней **не хранятся** —
+  при консьюме выпускается свежая пара, поэтому в таблице нет секретов.
 
 ## Аутентификация (две стратегии)
 
 ### Мобилка — JWT (Bearer), access + refresh
-- `POST /mobile/auth/register` (phone+password, email опц.) / `login` (email+password)
-  → `{ accessToken, refreshToken }`.
 - Access-токен (короткий TTL) в заголовке `Authorization: Bearer`. Защита —
   `JwtAuthGuard` (`JwtStrategy`, секрет `JWT_ACCESS_SECRET`).
+- **Payload access-токена узкий** — только `sub`/`role`/`sellerId` (тип `AuthPrincipal`):
+  профильные поля редактируемые, и держать их в токене значило бы отдавать устаревшие
+  значения после `PATCH /me`. Поэтому `GET /mobile/auth/me` **читает БД**, а не claims,
+  и полный профиль (`AuthUser`) существует только как ответ `/me` и в сессии админки.
 - `POST /mobile/auth/refresh` — ротация: старый refresh гасится, выдаётся новая
   пара. В БД хранится `sha256` от refresh-токена; в payload — `jti` для
   уникальности. `POST /mobile/auth/logout` отзывает refresh.
 
-### Мобилка — OTP (phone-first, passwordless)
-- Флоу: `POST /mobile/auth/otp/request` `{ phone, channel, email?/telegramId? }` →
-  `POST /mobile/auth/otp/verify` `{ phone, channel, code }` → `{ accessToken, refreshToken }`.
-- **Телефон — обязательный якорь.** find-or-create по `phone` (`AuthService.loginWithOtp`).
-  Канал (`SMS | EMAIL | TELEGRAM`) — только куда доставить код. При verify через email/telegram
-  контакт привязывается к юзеру (`UsersService.linkContact`).
-- `email` в запросе обязателен только при `channel=EMAIL`, `telegramId` — при `TELEGRAM`
-  (`@ValidateIf` в `otp/dto/otp.dto.ts`).
-- Правила (`OtpService`): код 6 цифр, TTL 300с, в БД только `sha256(code)`; resend-cooldown 60с;
-  ≥5 неверных попыток гасят код. Параметры — env `OTP_*`.
-- **Подключаемые каналы** (паттерн «стратегия»): интерфейс `OtpDeliverySender`
-  (`otp/channels/otp-sender.interface.ts`), реализации регистрируются в `OtpModule` под
-  DI-токеном `OTP_SENDERS`, `OtpDeliveryRegistry` выбирает по каналу.
-  - `EmailOtpSender` — **реальный** Gmail SMTP (nodemailer). Без SMTP-кредов в dev код падает в лог.
-  - `SmsOtpSender`, `TelegramOtpSender` — **заглушки**: пишут код в лог. Чтобы подключить
-    реальные — заменить тело `send()` (Telegram: Bot API по `telegram.botToken`; SMS: провайдер
-    по `sms.provider`/`sms.apiKey`), остальной код не трогается. Точки помечены `TODO`.
+### Мобилка — вход только через Telegram
+**OTP полностью удалён** (модуль `src/otp/`, каналы доставки, `OtpCode`, `OtpChannel`, nodemailer).
+Единственный вход — Telegram-бот, он же регистрация: юзер заводится по `telegramId`.
+
+Два пути, оба ведут к `AuthService.issueTokens`:
+
+1. **Нативка/веб — nonce + polling** (`TelegramAuthService`):
+   - `POST /mobile/auth/telegram/session` → `{ nonce, botUrl, expiresIn }`,
+     `botUrl = https://t.me/<TELEGRAM_BOT_USERNAME>?start=<nonce>`.
+   - Бот ловит `/start <nonce>` → `confirm()` привязывает `telegramId`/`userId` к сессии.
+   - `GET /mobile/auth/telegram/session/:nonce` → `pending` | `expired` | `confirmed` + токены.
+     Токены выдаются **ровно один раз**: `consumedAt` ставится условным `updateMany`
+     (`where consumedAt: null`), поэтому гонка двух поллеров не выдаст две пары.
+2. **Mini App — `initData`**: `POST /mobile/auth/telegram/miniapp` `{ initData }`.
+   Подпись проверяется вручную на `node:crypto` (`secret = HMAC("WebAppData", botToken)`,
+   сверка с `hash`, `auth_date` не старше TTL) — библиотека для 15 строк не нужна.
+
+- **Бот** (`TelegramBotService`, grammy): `TELEGRAM_USE_WEBHOOK=false` → long-polling (dev, без
+  публичного URL); `true` → `setWebhook` + `TelegramWebhookController` (`POST /telegram/webhook`,
+  без гварда, сверяет заголовок `x-telegram-bot-api-secret-token`; скрыт из Swagger через
+  `@ApiExcludeController`). Пустой `TELEGRAM_BOT_TOKEN` → приложение поднимается, бот не стартует
+  (warning в лог), вход недоступен.
+- `PATCH /mobile/auth/me` — `{ name?, phone?, email? }`, все опциональны, пустая строка очищает
+  поле. Занятые `phone`/`email` → **409** (`UsersService.updateProfile` ловит `P2002` и разбирает
+  `e.meta.target`, чтобы сказать, какое поле конфликтует).
+- Env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, `TELEGRAM_USE_WEBHOOK`,
+  `TELEGRAM_WEBHOOK_URL`, `TELEGRAM_WEBHOOK_SECRET`, `TG_AUTH_SESSION_TTL_SECONDS`.
 
 ### Админка — Session (httpOnly cookie)
 - `POST /admin/auth/login` (`LocalStrategy`, email+password) → passport-сессия,

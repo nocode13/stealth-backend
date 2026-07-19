@@ -106,8 +106,7 @@ export class CartService {
     const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
     const total = items
       .reduce(
-        (sum, item) =>
-          sum + Number(item.listing.price) * item.quantity,
+        (sum, item) => sum + Number(item.listing.price) * item.quantity,
         0,
       )
       .toFixed(2);

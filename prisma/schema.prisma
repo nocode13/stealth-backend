@@ -36,21 +36,16 @@ enum ReviewStatus {
   REJECTED
 }
 
-// Каналы доставки OTP-кода.
-enum OtpChannel {
-  SMS
-  EMAIL
-  TELEGRAM
-}
-
 model User {
   id           String   @id @default(cuid())
-  // phone — обязательный якорь личности (phone-first вход по OTP).
-  phone        String   @unique
-  // email/telegramId — опциональные контакты, привязываются при OTP через свой канал.
-  email        String?  @unique
+  // telegramId — якорь личности мобилки: вход только через Telegram-бота.
   telegramId   String?  @unique
-  // passwordHash опционален: у OTP-пользователей пароля нет.
+  // phone/email/name — опциональные профильные поля, юзер дозаполняет их сам.
+  // Станут обязательными на этапе оформления заказов (модели Order пока нет).
+  phone        String?  @unique
+  email        String?  @unique
+  name         String?
+  // passwordHash опционален: он есть только у админов (вход по паролю в админку).
   passwordHash String?
   role         Role     @default(CUSTOMER)
   // Продавец, к которому привязан пользователь (для роли SELLER).
@@ -66,20 +61,21 @@ model User {
   @@map("users")
 }
 
-// Одноразовые коды входа. Аккаунт идентифицируется по phone, channel — куда ушёл код.
-model OtpCode {
-  id          String     @id @default(cuid())
-  phone       String // аккаунт, который логинится
-  channel     OtpChannel
-  destination String // куда доставлен код: phone / email / telegramId
-  codeHash    String // sha256 от кода
-  expiresAt   DateTime
-  consumedAt  DateTime?
-  attempts    Int        @default(0)
-  createdAt   DateTime   @default(now())
+// Короткоживущая сессия входа через Telegram-бота (deeplink + polling).
+// Мобилка создаёт строку и открывает t.me/<bot>?start=<nonce>; бот на /start
+// проставляет telegramId/userId; мобилка поллит и забирает токены ровно один раз.
+// Токены здесь НЕ хранятся — при консьюме выпускается свежая пара (issueTokens).
+model TelegramAuthSession {
+  id         String    @id @default(cuid())
+  nonce      String    @unique
+  telegramId String? // проставляется ботом на /start
+  userId     String? // юзер, найденный/созданный по telegramId
+  consumedAt DateTime? // токены уже забраны — повторно не выдаём
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
 
-  @@index([phone, channel])
-  @@map("otp_codes")
+  @@index([expiresAt])
+  @@map("telegram_auth_sessions")
 }
 
 // Хранит хэш активного refresh-токена мобильной сессии (ротация при обновлении).

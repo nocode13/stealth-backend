@@ -1,7 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { OtpChannel, User } from '@prisma/client';
+import { User } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
@@ -25,8 +25,10 @@ export class AuthService {
   toAuthUser(user: User): AuthUser {
     return {
       id: user.id,
+      telegramId: user.telegramId,
       phone: user.phone,
       email: user.email,
+      name: user.name,
       role: user.role,
       sellerId: user.sellerId,
     };
@@ -44,18 +46,14 @@ export class AuthService {
     return this.toAuthUser(user);
   }
 
-  // Passwordless-вход по OTP: find-or-create по телефону, привязка контакта, токены.
-  async loginWithOtp(
-    phone: string,
-    channel: OtpChannel,
-    destination: string,
-  ): Promise<TokenPair> {
-    let user = await this.users.findByPhone(phone);
-    user ??= await this.users.createFromPhone(phone);
-    // Если код пришёл через email/telegram — привязываем контакт к юзеру.
-    if (channel !== OtpChannel.SMS) {
-      await this.users.linkContact(user.id, channel, destination);
-    }
+  // Вход мобилки: find-or-create по telegramId, дальше обычные токены.
+  // Профиль (phone/email) не трогаем — юзер заполняет его сам в настройках.
+  async loginWithTelegram(tg: {
+    telegramId: string;
+    name?: string | null;
+  }): Promise<TokenPair> {
+    let user = await this.users.findByTelegramId(tg.telegramId);
+    user ??= await this.users.createFromTelegram(tg);
     return this.issueTokens(user.id);
   }
 
@@ -64,10 +62,10 @@ export class AuthService {
     const user = await this.users.findById(userId);
     if (!user) throw new UnauthorizedException();
 
+    // Payload узкий: только то, что нужно гвардам. Профильные поля (phone/email/
+    // name) редактируемые, поэтому их отдаёт GET /mobile/auth/me из БД, а не JWT.
     const payload = {
       sub: user.id,
-      phone: user.phone,
-      email: user.email,
       role: user.role,
       sellerId: user.sellerId,
     };

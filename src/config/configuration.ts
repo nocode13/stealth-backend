@@ -17,23 +17,15 @@ export const envValidationSchema = Joi.object({
 
   SESSION_SECRET: Joi.string().required(),
 
-  // OTP
-  OTP_LENGTH: Joi.number().default(6),
-  OTP_TTL_SECONDS: Joi.number().default(300),
-  OTP_RESEND_COOLDOWN_SECONDS: Joi.number().default(60),
-  OTP_MAX_ATTEMPTS: Joi.number().default(5),
-
-  // Email (Gmail SMTP) — все optional, чтобы dev работал без кредов (фолбэк в лог).
-  SMTP_HOST: Joi.string().optional(),
-  SMTP_PORT: Joi.number().optional(),
-  SMTP_USER: Joi.string().allow('').optional(),
-  SMTP_PASS: Joi.string().allow('').optional(),
-  OTP_MAIL_FROM: Joi.string().optional(),
-
-  // Telegram / SMS — задел на будущее.
+  // Telegram — единственный способ входа в мобилку.
+  // Токен/username optional: без них приложение поднимается, но бот не стартует
+  // (логируется warning) — удобно для тестов и админских сборок.
   TELEGRAM_BOT_TOKEN: Joi.string().allow('').optional(),
-  SMS_PROVIDER: Joi.string().allow('').optional(),
-  SMS_API_KEY: Joi.string().allow('').optional(),
+  TELEGRAM_BOT_USERNAME: Joi.string().allow('').optional(),
+  TELEGRAM_USE_WEBHOOK: Joi.boolean().default(false),
+  TELEGRAM_WEBHOOK_URL: Joi.string().allow('').optional(),
+  TELEGRAM_WEBHOOK_SECRET: Joi.string().allow('').optional(),
+  TG_AUTH_SESSION_TTL_SECONDS: Joi.number().default(180),
 
   // S3-совместимое хранилище фото (локально — MinIO из docker-compose).
   S3_ENDPOINT: Joi.string().required(),
@@ -61,28 +53,16 @@ export default () => ({
   session: {
     secret: process.env.SESSION_SECRET!,
   },
-  otp: {
-    length: parseInt(process.env.OTP_LENGTH ?? '6', 10),
-    ttlSeconds: parseInt(process.env.OTP_TTL_SECONDS ?? '300', 10),
-    resendCooldownSeconds: parseInt(
-      process.env.OTP_RESEND_COOLDOWN_SECONDS ?? '60',
-      10,
-    ),
-    maxAttempts: parseInt(process.env.OTP_MAX_ATTEMPTS ?? '5', 10),
-  },
-  mail: {
-    host: process.env.SMTP_HOST,
-    port: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 465,
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-    from: process.env.OTP_MAIL_FROM ?? 'Stealth <no-reply@stealth.local>',
-  },
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN,
-  },
-  sms: {
-    provider: process.env.SMS_PROVIDER,
-    apiKey: process.env.SMS_API_KEY,
+    botUsername: process.env.TELEGRAM_BOT_USERNAME,
+    useWebhook: process.env.TELEGRAM_USE_WEBHOOK === 'true',
+    webhookUrl: process.env.TELEGRAM_WEBHOOK_URL,
+    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET,
+    authSessionTtlSeconds: parseInt(
+      process.env.TG_AUTH_SESSION_TTL_SECONDS ?? '180',
+      10,
+    ),
   },
   s3: {
     endpoint: process.env.S3_ENDPOINT,

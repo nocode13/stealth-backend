@@ -29,7 +29,9 @@ export class MobileCartController {
   }
 
   @Post('items')
-  @ApiOperation({ summary: 'Добавить листинг в корзину (или увеличить количество)' })
+  @ApiOperation({
+    summary: 'Добавить листинг в корзину (или увеличить количество)',
+  })
   addItem(@CurrentUser('id') userId: string, @Body() dto: AddCartItemDto) {
     return this.cart.addItem(userId, dto);
   }

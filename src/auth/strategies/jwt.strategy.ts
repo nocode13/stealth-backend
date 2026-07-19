@@ -3,12 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { Role } from '@prisma/client';
-import { AuthUser } from '../../common/decorators/current-user.decorator';
+import { AuthPrincipal } from '../../common/decorators/current-user.decorator';
 
 interface JwtPayload {
   sub: string;
-  phone: string;
-  email: string | null;
   role: Role;
   sellerId: string | null;
 }
@@ -24,12 +22,11 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     });
   }
 
-  // Возвращённое значение попадает в request.user.
-  validate(payload: JwtPayload): AuthUser {
+  // Возвращённое значение попадает в request.user. Профильных полей тут нет
+  // намеренно — они редактируемые, читаются из БД в /mobile/auth/me.
+  validate(payload: JwtPayload): AuthPrincipal {
     return {
       id: payload.sub,
-      phone: payload.phone,
-      email: payload.email,
       role: payload.role,
       sellerId: payload.sellerId,
     };

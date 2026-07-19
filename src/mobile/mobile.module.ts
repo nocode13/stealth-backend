@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
-import { OtpModule } from '../otp/otp.module';
+import { TelegramModule } from '../telegram/telegram.module';
+import { UsersModule } from '../users/users.module';
 import { CategoriesModule } from '../categories/categories.module';
 import { CatalogModule } from '../catalog/catalog.module';
 import { ListingsModule } from '../listings/listings.module';
@@ -15,7 +16,8 @@ import { MobileCartController } from './mobile-cart.controller';
 @Module({
   imports: [
     AuthModule,
-    OtpModule,
+    TelegramModule,
+    UsersModule,
     CategoriesModule,
     CatalogModule,
     ListingsModule,
