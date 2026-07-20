@@ -31,7 +31,7 @@ pnpm install
 cp .env.example .env          # секреты уже с дефолтами для локалки
 pnpm db:up                    # поднять Postgres + MinIO в docker
 pnpm db:migrate               # применить миграции (prisma migrate dev)
-pnpm db:seed                  # засидить админа, продавца, категории, справочник
+pnpm db:seed                  # засидить супер-админа (больше сид ничего не создаёт)
 pnpm start:dev                # запуск с watch
 ```
 
@@ -45,10 +45,11 @@ pnpm start:dev                # запуск с watch
   (`stealth`/`stealth123`), бакет `catalog` создаётся автоматически (`minio-init`
   в `docker-compose.yml`, публичное чтение).
 
-Сид-пользователи админки (пароль у всех `password123`, `phone` заполнен — но у юзеров
-мобилки его может не быть, вход туда идёт по `telegramId`):
-- `admin@stealth.local` / `+998900000001` — `SUPER_ADMIN` (справочник, категории, продавцы);
-- `seller@stealth.local` / `+998900000002` — `SELLER` (владелец «Первый цветочный»).
+Сид создаёт **только супер-админа** — `admin@stealth.local` / `+998900000001`
+(справочник, категории, продавцы). Пароль — из `SEED_ADMIN_PASSWORD`, локальный
+дефолт `password123`. Продавцы, категории, каталог и листинги заводятся через
+админку: сид намеренно не наполняет БД демо-данными, чтобы его можно было
+безопасно прогонять на проде.
 
 ## Скрипты
 
@@ -316,12 +317,41 @@ seller-композер отдаёт управление дальше (`next()`
 
 ### Хранилище фото (`src/storage/`)
 - `StorageService` — S3-совместимый клиент (`@aws-sdk/client-s3`, `forcePathStyle: true`).
-  Локально — **MinIO** (`docker-compose.yml`, бакет `catalog`, публичное чтение).
-  На проде меняются только env (`S3_*`), код не трогаем.
+  Локально — **MinIO** (`docker-compose.yml`, бакет `catalog`, публичное чтение),
+  на проде — **Cloudflare R2**. Меняются только env (`S3_*`), код не трогаем.
+- ⚠️ `S3_PUBLIC_URL` указывает на **конкретный бакет**, имя бакета входит в
+  значение (`http://localhost:9000/catalog` для MinIO, публичный домен для R2).
+  `upload()` склеивает ссылку как `${S3_PUBLIC_URL}/${key}` и `S3_BUCKET` в путь
+  не подставляет — он нужен только для самих S3-вызовов.
 - `POST /admin/catalog/:id/image` (multipart, поле `file`, `FileInterceptor` с
   `memoryStorage`, лимит 5MB, только `image/*`) — загружает в S3 и обновляет
   `CatalogItem.imageUrl`. Владелец-проверка: `SELLER` может грузить фото только
   для своих позиций.
+
+## Деплой (Railway)
+
+`railway.json`: билд — `pnpm build` (внутри `prisma generate && nest build`),
+старт — `pnpm start:railway` (`prisma migrate deploy && node dist/main`),
+healthcheck на `/health`.
+
+Инфраструктура: **Railway** (сервис + Postgres-аддон) + **Cloudflare R2** (фото).
+R2, а не Railway Buckets: последние приватные, публичных URL не дают
+(«Public buckets are currently not supported»), а `CatalogItem.imageUrl` хранится
+в БД постоянной ссылкой — presigned не подходит.
+
+Что специфично для прода (`NODE_ENV=production`) в `src/main.ts`:
+- `app.set('trust proxy', 1)` — иначе за TLS-терминатором Railway
+  `express-session` не поставит cookie с `secure: true`;
+- cookie сессии `sameSite: 'none'` — админка на другом домене, cookie cross-site;
+- `app.listen(port, '0.0.0.0')` — на `localhost` прокси не достучится (502);
+- `CORS_ORIGIN` — точный список доменов, не `*` (с `credentials: true` браузер
+  отклоняет `*`).
+
+Telegram-бот на проде — **только webhook** (`TELEGRAM_USE_WEBHOOK=true` +
+`TELEGRAM_WEBHOOK_URL`): при редеплое/нескольких репликах два поллера конфликтуют.
+
+`numReplicas: 1` в `railway.json` не случайно — при масштабировании появятся
+конфликт поллеров бота (если вернуть polling) и гонки на инвентаре в заказах.
 
 ## Конвенции
 

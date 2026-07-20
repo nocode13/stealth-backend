@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import session from 'express-session';
@@ -10,9 +11,16 @@ import { AdminModule } from './admin/admin.module';
 import { MobileModule } from './mobile/mobile.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const config = app.get(ConfigService);
   const isProd = config.get<string>('nodeEnv') === 'production';
+
+  // На хостинге (Railway) приложение стоит за прокси, который терминирует TLS.
+  // Без trust proxy express-session считает соединение небезопасным и не ставит
+  // cookie с secure: true — логин в админку молча ломается.
+  if (isProd) {
+    app.set('trust proxy', 1);
+  }
 
   // Валидация DTO глобально.
   app.useGlobalPipes(
@@ -43,7 +51,9 @@ async function bootstrap() {
       saveUninitialized: false,
       cookie: {
         httpOnly: true,
-        sameSite: 'lax',
+        // В проде админка живёт на другом домене, чем API, — cookie становится
+        // cross-site, и браузер примет её только с sameSite=none + secure.
+        sameSite: isProd ? 'none' : 'lax',
         secure: isProd,
         maxAge: 1000 * 60 * 60 * 24 * 7, // 7 дней
       },
@@ -78,7 +88,8 @@ async function bootstrap() {
   SwaggerModule.setup('docs/mobile', app, mobileDoc);
 
   const port = config.get<number>('port') ?? 3000;
-  await app.listen(port);
+  // 0.0.0.0, а не localhost: иначе прокси хостинга не достучится до контейнера.
+  await app.listen(port, '0.0.0.0');
   console.log(`🚀 http://localhost:${port} | docs: /docs/admin, /docs/mobile`);
 }
 void bootstrap();

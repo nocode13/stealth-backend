@@ -5,13 +5,18 @@
   "author": "",
   "private": true,
   "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.5.2",
   "scripts": {
-    "build": "nest build",
+    "build": "prisma generate && nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
+    "start:railway": "prisma migrate deploy && node dist/main",
     "db:up": "docker compose up -d postgres minio minio-init",
     "db:down": "docker compose down",
     "db:migrate": "prisma migrate dev",
