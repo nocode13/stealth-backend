@@ -52,6 +52,33 @@ async function main() {
     data: { sellerId: seller.id },
   });
 
+  // Второй продавец: нужен, чтобы проверять разбиение checkout'а на несколько
+  // заказов (товары разных продавцов = разные Order с общим groupId).
+  const secondSellerOwner = await prisma.user.upsert({
+    where: { email: 'seller2@stealth.local' },
+    update: {},
+    create: {
+      phone: '+998900000004',
+      email: 'seller2@stealth.local',
+      passwordHash,
+      role: Role.SELLER,
+    },
+  });
+
+  const secondSeller = await prisma.seller.upsert({
+    where: { ownerUserId: secondSellerOwner.id },
+    update: {},
+    create: {
+      name: 'Лавка у дома',
+      ownerUserId: secondSellerOwner.id,
+    },
+  });
+
+  await prisma.user.update({
+    where: { id: secondSellerOwner.id },
+    data: { sellerId: secondSeller.id },
+  });
+
   // Тестовый покупатель — для ручного тестирования мобилки (корзина и т.п.).
   const customer = await prisma.user.upsert({
     where: { email: 'customer@stealth.local' },
@@ -298,9 +325,30 @@ async function main() {
     },
   });
 
+  // Листинги второго продавца поверх того же справочника — так в корзине легко
+  // собрать товары двух продавцов и увидеть разбиение на два заказа.
+  for (const [index, catalogItem] of [catalogItems[1], catalogItems[3]].entries()) {
+    await prisma.listing.upsert({
+      where: {
+        sellerId_catalogItemId: {
+          sellerId: secondSeller.id,
+          catalogItemId: catalogItem.id,
+        },
+      },
+      update: {},
+      create: {
+        sellerId: secondSeller.id,
+        catalogItemId: catalogItem.id,
+        price: index === 0 ? 30000 : 45000,
+        stock: 50,
+        status: ListingStatus.ACTIVE,
+      },
+    });
+  }
+
   console.log('Seed complete:', {
     admin: admin.email,
-    seller: seller.name,
+    sellers: [seller.name, secondSeller.name],
     customer: customer.email,
     categories: categories.length,
     catalogItems: catalogItems.length,

@@ -36,12 +36,45 @@ enum ReviewStatus {
   REJECTED
 }
 
+// Жизненный цикл заказа. Переходы валидируются в OrdersService.ALLOWED_TRANSITIONS —
+// эта же карта строит кнопки в кабинете продавца в боте, чтобы список не разъезжался.
+enum OrderStatus {
+  NEW // создан, продавец ещё не подтвердил
+  CONFIRMED // продавец принял
+  ASSEMBLING // собирается
+  DELIVERING // передан курьеру, едет
+  ARRIVED // курьер на месте — покупателю уходит пуш «выходите, заказ у двери»
+  DELIVERED // доставлен (терминальный)
+  CANCELLED // отменён (терминальный)
+}
+
+// Пока единственный способ оплаты. Payme/Click добавляются значениями этого енама —
+// отдельная однострочная миграция, схема заказа при этом не меняется.
+enum PaymentMethod {
+  CASH
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+}
+
+// Зачем открывали бота по диплинку. Оба флоу устроены одинаково (nonce → бот → поллинг),
+// поэтому живут в одной таблице BotLinkSession, а не в двух почти одинаковых.
+enum BotSessionPurpose {
+  DELIVERY_LOCATION // покупатель шлёт геолокацию для адреса доставки
+  SELLER_LINK // продавец привязывает свой Telegram к аккаунту админки
+}
+
 model User {
   id           String   @id @default(cuid())
   // telegramId — якорь личности мобилки: вход только через Telegram-бота.
   telegramId   String?  @unique
   // phone/email/name — опциональные профильные поля, юзер дозаполняет их сам.
-  // Станут обязательными на этапе оформления заказов (модели Order пока нет).
+  // В профиле они так и остаются опциональными, но checkout требует телефон и имя:
+  // они уходят в снапшот заказа (Order.contactPhone/contactName), а телефон,
+  // если его ещё не было, дописывается сюда.
   phone        String?  @unique
   email        String?  @unique
   name         String?
@@ -55,6 +88,7 @@ model User {
   ownedSeller  Seller?  @relation("SellerOwner")
   refreshTokens RefreshToken[]
   cartItems    CartItem[]
+  orders       Order[]
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -76,6 +110,30 @@ model TelegramAuthSession {
 
   @@index([expiresAt])
   @@map("telegram_auth_sessions")
+}
+
+// Короткоживущая сессия «сходить в бота и вернуться» — та же механика, что у
+// TelegramAuthSession (nonce в диплинке + поллинг), но для уже известного пользователя:
+// userId берётся из текущей авторизации, а не создаётся ботом.
+// TelegramAuthSession намеренно оставлена отдельной моделью: она выдаёт токены и
+// консьюмится иначе, объединять их значило бы усложнить вход ради экономии таблицы.
+model BotLinkSession {
+  id      String            @id @default(cuid())
+  nonce   String            @unique
+  purpose BotSessionPurpose
+  userId  String
+
+  // Заполняются ботом, когда покупатель прислал геопозицию (purpose DELIVERY_LOCATION).
+  latitude  Float?
+  longitude Float?
+
+  consumedAt DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("bot_link_sessions")
 }
 
 // Хранит хэш активного refresh-токена мобильной сессии (ротация при обновлении).
@@ -102,6 +160,7 @@ model Seller {
   listings    Listing[]
   categories    Category[]
   catalogItems  CatalogItem[]
+  orders        Order[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
@@ -173,6 +232,7 @@ model Listing {
   updatedAt     DateTime      @updatedAt
 
   cartItems     CartItem[]
+  orderItems    OrderItem[]
 
   @@unique([sellerId, catalogItemId])
   @@index([status])
@@ -197,4 +257,103 @@ model CartItem {
   @@index([userId])
   @@index([listingId])
   @@map("cart_items")
+}
+
+// Заказ — всегда на ОДНОГО продавца: один checkout с товарами разных продавцов
+// режется на несколько Order с общим groupId. Отдельной модели Checkout нет по той же
+// причине, что нет обёртки Cart над CartItem — сущность без собственных полей не нужна.
+//
+// Все деньги и контакты — снапшот на момент оформления: цена листинга и профиль
+// пользователя меняются, а заказ обязан остаться читаемым как есть.
+model Order {
+  id       String @id @default(cuid())
+  // Общий ключ заказов одного оформления (несколько продавцов = несколько Order).
+  groupId  String
+  // Человекочитаемый номер для поддержки и для поиска в боте.
+  orderNumber Int @unique @default(autoincrement())
+
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sellerId String
+  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+
+  status        OrderStatus   @default(NEW)
+  paymentMethod PaymentMethod @default(CASH)
+  paymentStatus PaymentStatus @default(PENDING)
+
+  itemsTotal  Decimal @db.Decimal(12, 2)
+  deliveryFee Decimal @default(0) @db.Decimal(12, 2)
+  total       Decimal @db.Decimal(12, 2)
+  currency    String  @default("UZS")
+
+  contactName  String
+  contactPhone String
+
+  deliveryAddress String
+  deliveryComment String?
+  // Координаты из Telegram-локации. Необязательны: текстового адреса достаточно,
+  // но именно они дают курьеру кнопку «Маршрут» в карточке локации.
+  deliveryLat     Float?
+  deliveryLng     Float?
+
+  // Задел под курьерскую систему: позже заменяется на courierId → модель Courier.
+  courierName  String?
+  courierPhone String?
+
+  cancelReason String?
+
+  items   OrderItem[]
+  history OrderStatusHistory[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  confirmedAt DateTime?
+  deliveredAt DateTime?
+
+  @@index([groupId])
+  @@index([sellerId, status])
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+// Позиция заказа — полный снапшот, а не только FK на листинг: цена и название меняются,
+// листинг может уехать в ARCHIVED или быть удалён (тогда listingId станет null).
+model OrderItem {
+  id      String @id @default(cuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  listingId String?
+  listing   Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+
+  catalogItemName     String
+  catalogItemImageUrl String?
+  unit                String  @default("шт")
+
+  price    Decimal @db.Decimal(12, 2)
+  quantity Int
+  total    Decimal @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+// Лог смен статуса: по нему строится таймлайн заказа в мобилке и в админке.
+// changedByUserId пуст, когда статус проставила система (создание заказа).
+model OrderStatusHistory {
+  id      String @id @default(cuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  status          OrderStatus
+  comment         String?
+  changedByUserId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@map("order_status_history")
 }

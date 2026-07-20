@@ -7,6 +7,9 @@ export const envValidationSchema = Joi.object({
     .default('development'),
   PORT: Joi.number().default(3000),
   CORS_ORIGIN: Joi.string().default('*'),
+  // Публичный адрес админки: из него строится ссылка «Открыть в админке»,
+  // которую бот кладёт в уведомление продавцу о новом заказе.
+  ADMIN_URL: Joi.string().default('http://localhost:5173'),
 
   DATABASE_URL: Joi.string().required(),
 
@@ -41,6 +44,10 @@ export default () => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: parseInt(process.env.PORT ?? '3000', 10),
   corsOrigin: (process.env.CORS_ORIGIN ?? '*').split(',').map((s) => s.trim()),
+  adminUrl: (process.env.ADMIN_URL ?? 'http://localhost:5173').replace(
+    /\/+$/,
+    '',
+  ),
   database: {
     url: process.env.DATABASE_URL!,
   },

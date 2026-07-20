@@ -15,10 +15,14 @@ import { AuthenticatedGuard } from '../auth/guards/authenticated.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
 import { LoginDto } from '../auth/dto/auth.dto';
+import { BotSessionPurpose } from '@prisma/client';
+import { TelegramLinkService } from '../telegram/telegram-link.service';
 
 @ApiTags('admin/auth')
 @Controller('admin/auth')
 export class AdminAuthController {
+  constructor(private readonly links: TelegramLinkService) {}
+
   @Post('login')
   @UseGuards(LocalAuthGuard)
   @HttpCode(HttpStatus.OK)
@@ -49,5 +53,19 @@ export class AdminAuthController {
   @ApiOperation({ summary: 'Текущий пользователь админки' })
   me(@CurrentUser() user: AuthUser): AuthUser {
     return user;
+  }
+
+  @Post('telegram/link')
+  @UseGuards(AuthenticatedGuard)
+  @ApiCookieAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Ссылка для привязки Telegram к аккаунту',
+    description:
+      'Продавец переходит по botUrl и жмёт Start — после этого заказы приходят ' +
+      'ему в бота и он может менять их статус прямо в чате.',
+  })
+  linkTelegram(@CurrentUser() user: AuthUser) {
+    return this.links.createSession(user.id, BotSessionPurpose.SELLER_LINK);
   }
 }

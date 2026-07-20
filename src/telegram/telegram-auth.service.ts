@@ -9,6 +9,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { AuthService, TokenPair } from '../auth/auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+import { isStaffRole } from '../common/telegram-identity';
 
 // Данные пользователя, приходящие от Telegram (и из /start, и из initData).
 export interface TelegramUser {
@@ -74,17 +75,33 @@ export class TelegramAuthService {
   }
 
   // Шаг 2: бот получил /start <nonce> — привязываем к сессии живого юзера.
-  // Возвращает false, если сессия не найдена/просрочена (бот скажет об этом в чат).
-  async confirm(nonce: string, from: TelegramUser): Promise<boolean> {
+  // 'expired' — сессия не найдена/просрочена, 'staff' — под рабочим аккаунтом
+  // в мобилку не пускаем (см. common/telegram-identity.ts). Бот озвучит исход в чат.
+  async confirm(
+    nonce: string,
+    from: TelegramUser,
+  ): Promise<'ok' | 'expired' | 'staff'> {
     const session = await this.prisma.telegramAuthSession.findUnique({
       where: { nonce },
     });
     if (!session || session.consumedAt || session.expiresAt < new Date()) {
-      return false;
+      return 'expired';
     }
 
     const telegramId = String(from.id);
     let user = await this.users.findByTelegramId(telegramId);
+    if (user && isStaffRole(user.role)) {
+      // Гасим сессию сразу, чтобы мобилка не поллила впустую все 180 с: юзер
+      // уже прочитал причину в чате с ботом, ждать нечего.
+      await this.prisma.telegramAuthSession.update({
+        where: { id: session.id },
+        data: { consumedAt: new Date() },
+      });
+      this.logger.warn(
+        `Вход в мобилку под staff-аккаунтом отклонён: telegramId=${telegramId}`,
+      );
+      return 'staff';
+    }
     user ??= await this.users.createFromTelegram({
       telegramId,
       name: displayName(from),
@@ -94,7 +111,7 @@ export class TelegramAuthService {
       where: { id: session.id },
       data: { telegramId, userId: user.id },
     });
-    return true;
+    return 'ok';
   }
 
   // Шаг 3: мобилка поллит. Токены отдаём ровно один раз — consumedAt ставится

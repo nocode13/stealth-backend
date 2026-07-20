@@ -7,10 +7,19 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Bot } from 'grammy';
 import type { Update } from 'grammy/types';
-import { TelegramAuthService } from './telegram-auth.service';
+import { CustomerComposer } from './handlers/customer.composer';
+import { SellerComposer } from './handlers/seller.composer';
 
-// Бот делает ровно одно: ловит /start <nonce> из диплинка мобилки и привязывает
-// telegramId к сессии входа. Токены отсюда не уходят — их забирает поллинг.
+/**
+ * Bootstrap бота: токен, режим (вебхук/поллинг), подключение хендлеров.
+ * Самих хендлеров тут нет — они в handlers/*.composer.ts.
+ *
+ * Порядок подключения важен: сначала продавец, потом покупатель. Обе ветки ловят
+ * `/start`, и seller-композер пропускает управление дальше (next()), если юзер
+ * не продавец. Так покупательский флоу остаётся ровно таким, каким был.
+ *
+ * Исходящие сообщения живут отдельно (TelegramNotifyService) — см. комментарий там.
+ */
 @Injectable()
 export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TelegramBotService.name);
@@ -18,7 +27,8 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly config: ConfigService,
-    private readonly telegramAuth: TelegramAuthService,
+    private readonly sellerComposer: SellerComposer,
+    private readonly customerComposer: CustomerComposer,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -32,24 +42,8 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     }
 
     this.bot = new Bot(token);
-    this.bot.command('start', async (ctx) => {
-      const nonce = ctx.match?.trim();
-      if (!ctx.from) return;
-
-      if (!nonce) {
-        await ctx.reply(
-          'Привет! Чтобы войти, откройте приложение и нажмите «Войти через Telegram».',
-        );
-        return;
-      }
-
-      const ok = await this.telegramAuth.confirm(nonce, ctx.from);
-      await ctx.reply(
-        ok
-          ? 'Готово, вы вошли — возвращайтесь в приложение.'
-          : 'Ссылка для входа устарела. Откройте приложение и попробуйте ещё раз.',
-      );
-    });
+    this.bot.use(this.sellerComposer.build());
+    this.bot.use(this.customerComposer.build());
 
     this.bot.catch((err) => {
       this.logger.error(`Ошибка в обработчике бота: ${err.message}`, err.error);
