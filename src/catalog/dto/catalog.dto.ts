@@ -34,7 +34,12 @@ export class CreateCatalogItemDto {
   unit?: string;
 }
 
-export class UpdateCatalogItemDto extends PartialType(CreateCatalogItemDto) {}
+export class UpdateCatalogItemDto extends PartialType(CreateCatalogItemDto) {
+  @ApiPropertyOptional({ enum: ReviewStatus })
+  @IsOptional()
+  @IsEnum(ReviewStatus)
+  status?: ReviewStatus;
+}
 
 export class FindCatalogQueryDto extends CursorPaginationDto {
   @ApiPropertyOptional({ description: 'Поиск по названию' })

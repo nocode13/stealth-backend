@@ -1,8 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { Seller, SellerStatus } from '@prisma/client';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma, Role, Seller } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CursorPage, toCursorPage } from '../common/pagination';
-import { FindSellersQueryDto } from './dto/seller.dto';
+import {
+  CreateSellerDto,
+  FindSellersQueryDto,
+  UpdateSellerDto,
+} from './dto/seller.dto';
 
 @Injectable()
 export class SellersService {
@@ -30,7 +35,58 @@ export class SellersService {
     return seller;
   }
 
-  updateStatus(id: string, status: SellerStatus): Promise<Seller> {
-    return this.prisma.seller.update({ where: { id }, data: { status } });
+  // Продавца заводит только SUPER_ADMIN. Владелец — новый User(role: SELLER),
+  // логинится в админку по email+паролю, как и остальной staff. sellerId владельцу
+  // проставляется вторым шагом: Seller.ownerUserId для него ещё не существует,
+  // пока сам продавец не создан, а весь остальной код (staffScope в заказах,
+  // видимость категорий/каталога) скоупит SELLER именно по User.sellerId.
+  async create(dto: CreateSellerDto): Promise<Seller> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const passwordHash = await bcrypt.hash(dto.ownerPassword, 10);
+        const owner = await tx.user.create({
+          data: {
+            email: dto.ownerEmail,
+            phone: dto.ownerPhone,
+            passwordHash,
+            role: Role.SELLER,
+          },
+        });
+        const seller = await tx.seller.create({
+          data: {
+            name: dto.name,
+            description: dto.description,
+            ownerUserId: owner.id,
+          },
+        });
+        await tx.user.update({
+          where: { id: owner.id },
+          data: { sellerId: seller.id },
+        });
+        return seller;
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        const target = (e.meta?.target as string[] | undefined) ?? [];
+        const field = target.includes('phone')
+          ? 'Этот телефон'
+          : target.includes('email')
+            ? 'Этот email'
+            : 'Эти данные';
+        throw new ConflictException(`${field} уже привязан к другому аккаунту`);
+      }
+      throw e;
+    }
+  }
+
+  update(id: string, dto: UpdateSellerDto): Promise<Seller> {
+    return this.prisma.seller.update({ where: { id }, data: dto });
+  }
+
+  updateBanner(id: string, bannerUrl: string): Promise<Seller> {
+    return this.prisma.seller.update({ where: { id }, data: { bannerUrl } });
   }
 }

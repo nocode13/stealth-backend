@@ -153,6 +153,8 @@ model RefreshToken {
 model Seller {
   id          String       @id @default(cuid())
   name        String
+  description String?
+  bannerUrl   String?
   status      SellerStatus @default(ACTIVE)
   ownerUserId String       @unique
   owner       User         @relation("SellerOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)

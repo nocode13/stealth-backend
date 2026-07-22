@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -91,14 +92,26 @@ export class CatalogService {
   ): Promise<CatalogItem> {
     await this.categories.assertUsable(dto.categoryId, user.sellerId);
     const isSuperAdmin = user.role === Role.SUPER_ADMIN;
-    return this.prisma.catalogItem.create({
-      data: {
-        ...dto,
-        sellerId: isSuperAdmin ? null : user.sellerId,
-        status: isSuperAdmin ? ReviewStatus.APPROVED : ReviewStatus.PENDING,
-      },
-      include: withCategory,
-    });
+    try {
+      return await this.prisma.catalogItem.create({
+        data: {
+          ...dto,
+          sellerId: isSuperAdmin ? null : user.sellerId,
+          status: isSuperAdmin ? ReviewStatus.APPROVED : ReviewStatus.PENDING,
+        },
+        include: withCategory,
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'Позиция с таким slug уже существует в этом каталоге',
+        );
+      }
+      throw e;
+    }
   }
 
   async update(
@@ -109,6 +122,9 @@ export class CatalogService {
     const item = await this.findOne(id);
     if (user.role !== Role.SUPER_ADMIN && item.sellerId !== user.sellerId) {
       throw new ForbiddenException('Чужая позиция справочника');
+    }
+    if (dto.status !== undefined && user.role !== Role.SUPER_ADMIN) {
+      throw new ForbiddenException('Недостаточно прав');
     }
     if (dto.categoryId) {
       await this.categories.assertUsable(dto.categoryId, user.sellerId);
@@ -126,15 +142,6 @@ export class CatalogService {
       throw new ForbiddenException('Чужая позиция справочника');
     }
     await this.prisma.catalogItem.delete({ where: { id } });
-  }
-
-  async updateStatus(id: string, status: ReviewStatus): Promise<CatalogItem> {
-    await this.findOne(id);
-    return this.prisma.catalogItem.update({
-      where: { id },
-      data: { status },
-      include: withCategory,
-    });
   }
 
   async updateImage(

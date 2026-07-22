@@ -19,8 +19,7 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { Role, ReviewStatus } from '@prisma/client';
-import { IsEnum } from 'class-validator';
+import { Role } from '@prisma/client';
 import type { Express } from 'express';
 import { AuthenticatedGuard } from '../auth/guards/authenticated.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -34,11 +33,6 @@ import {
   FindCatalogQueryDto,
   UpdateCatalogItemDto,
 } from '../catalog/dto/catalog.dto';
-
-class UpdateCatalogItemStatusDto {
-  @IsEnum(ReviewStatus)
-  status: ReviewStatus;
-}
 
 // Справочник: SUPER_ADMIN управляет master-списком, SELLER может предложить
 // свою позицию (уходит в PENDING до апрува) и видит/использует её только сам.
@@ -73,6 +67,10 @@ export class AdminCatalogController {
   }
 
   @Patch(':id')
+  @ApiOperation({
+    summary:
+      'Обновить позицию (поле status — только SUPER_ADMIN, апрув/реджект)',
+  })
   update(
     @Param('id') id: string,
     @Body() dto: UpdateCatalogItemDto,
@@ -84,16 +82,6 @@ export class AdminCatalogController {
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.catalog.remove(id, user);
-  }
-
-  @Patch(':id/status')
-  @Roles(Role.SUPER_ADMIN)
-  @ApiOperation({ summary: 'Апрув/реджект предложенной позиции справочника' })
-  updateStatus(
-    @Param('id') id: string,
-    @Body() dto: UpdateCatalogItemStatusDto,
-  ) {
-    return this.catalog.updateStatus(id, dto.status);
   }
 
   @Post(':id/image')

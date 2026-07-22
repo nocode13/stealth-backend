@@ -39,17 +39,20 @@ export class CategoriesService {
     query: FindCategoriesQueryDto,
   ): Promise<CursorPage<Category>> {
     const isSuperAdmin = user.role === Role.SUPER_ADMIN;
-    const where: Prisma.CategoryWhereInput = {
-      ...searchFilter(query.search),
-      ...(isSuperAdmin
-        ? { status: query.status, sellerId: query.sellerId }
-        : {
-            OR: [
-              { sellerId: null, status: ReviewStatus.APPROVED },
-              { sellerId: user.sellerId ?? undefined },
-            ],
-          }),
-    };
+    const search = searchFilter(query.search);
+    const where: Prisma.CategoryWhereInput = isSuperAdmin
+      ? { ...search, status: query.status, sellerId: query.sellerId }
+      : {
+          AND: [
+            search,
+            {
+              OR: [
+                { sellerId: null, status: ReviewStatus.APPROVED },
+                { sellerId: user.sellerId ?? undefined },
+              ],
+            },
+          ].filter(Boolean) as Prisma.CategoryWhereInput[],
+        };
     const rows = await this.prisma.category.findMany({
       where,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
