@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, Role, Seller } from '@prisma/client';
+import { Prisma, Role, Seller, SellerStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CursorPage, toCursorPage } from '../common/pagination';
@@ -31,6 +31,15 @@ export class SellersService {
 
   async findOne(id: string): Promise<Seller> {
     const seller = await this.prisma.seller.findUnique({ where: { id } });
+    if (!seller) throw new NotFoundException('Продавец не найден');
+    return seller;
+  }
+
+  // Витрина мобилки: только ACTIVE продавцы (SUSPENDED/PENDING не показываем).
+  async findOnePublic(id: string): Promise<Seller> {
+    const seller = await this.prisma.seller.findUnique({
+      where: { id, status: SellerStatus.ACTIVE },
+    });
     if (!seller) throw new NotFoundException('Продавец не найден');
     return seller;
   }

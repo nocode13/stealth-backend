@@ -197,6 +197,14 @@ export class TelegramLinkService {
     }
   }
 
+  /** Обратная операция к linkSeller: освобождает telegramId. */
+  async unlinkSeller(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { telegramId: null },
+    });
+  }
+
   /** Кидает 409, если этот Telegram уже занят другим пользователем. */
   async assertTelegramFree(telegramId: string, userId: string): Promise<void> {
     const owner = await this.prisma.user.findUnique({ where: { telegramId } });

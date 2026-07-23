@@ -15,6 +15,7 @@ import {
 
 const withCatalog = {
   catalogItem: { include: { category: true } },
+  seller: { select: { id: true, name: true } },
 } satisfies Prisma.ListingInclude;
 
 function buildPriceFilter(
@@ -41,6 +42,7 @@ export class ListingsService {
       where: {
         status: ListingStatus.ACTIVE,
         stock: { gt: 0 },
+        sellerId: query.sellerId,
         price: buildPriceFilter(query.minPrice, query.maxPrice),
         catalogItem: {
           categoryId: query.categoryId,

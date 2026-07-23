@@ -68,4 +68,19 @@ export class AdminAuthController {
   linkTelegram(@CurrentUser() user: AuthUser) {
     return this.links.createSession(user.id, BotSessionPurpose.SELLER_LINK);
   }
+
+  @Post('telegram/unlink')
+  @UseGuards(AuthenticatedGuard)
+  @ApiCookieAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Отвязать Telegram от аккаунта',
+    description:
+      'Освобождает telegramId — заказы перестают приходить в бота. ' +
+      'Привязать заново можно в любой момент через /telegram/link.',
+  })
+  async unlinkTelegram(@CurrentUser() user: AuthUser): Promise<AuthUser> {
+    await this.links.unlinkSeller(user.id);
+    return { ...user, telegramId: null };
+  }
 }

@@ -70,8 +70,9 @@ export class FindListingsQueryDto extends CursorPaginationDto {
   @Min(0)
   maxPrice?: number;
 
-  // Только для SUPER_ADMIN — смотреть листинги конкретного продавца (страница
-  // продавца в админке). SELLER всегда скоупится своим sellerId, это поле игнорируется.
+  // На витрине мобилки — фильтр листингов конкретного продавца (страница продавца).
+  // В админке — только для SUPER_ADMIN (смотреть листинги любого продавца); SELLER
+  // всегда скоупится своим sellerId, это поле там игнорируется.
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
