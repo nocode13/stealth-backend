@@ -90,7 +90,7 @@ export class CatalogService {
     dto: CreateCatalogItemDto,
     user: AuthUser,
   ): Promise<CatalogItem> {
-    await this.categories.assertUsable(dto.categoryId, user.sellerId);
+    await this.categories.assertUsable(dto.categoryId, user);
     const isSuperAdmin = user.role === Role.SUPER_ADMIN;
     try {
       return await this.prisma.catalogItem.create({
@@ -127,7 +127,7 @@ export class CatalogService {
       throw new ForbiddenException('Недостаточно прав');
     }
     if (dto.categoryId) {
-      await this.categories.assertUsable(dto.categoryId, user.sellerId);
+      await this.categories.assertUsable(dto.categoryId, user);
     }
     return this.prisma.catalogItem.update({
       where: { id },

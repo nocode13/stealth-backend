@@ -84,18 +84,19 @@ export class CategoriesService {
   }
 
   // Проверяет, что categoryId виден и доступен для использования продавцом
-  // (master APPROVED либо собственная APPROVED-категория продавца). sellerId
-  // передаётся напрямую (а не AuthUser), т.к. используется и из других
-  // доменных сервисов (CatalogService, ListingsService).
-  async assertUsable(
-    categoryId: string,
-    sellerId: string | null,
-  ): Promise<Category> {
+  // (master APPROVED либо собственная APPROVED-категория продавца).
+  // SUPER_ADMIN проходит проверку владения всегда — та же логика, что и в
+  // остальных проверках владения в CatalogService/CategoriesService.
+  async assertUsable(categoryId: string, user: AuthUser): Promise<Category> {
     const category = await this.findOne(categoryId);
     if (category.status !== ReviewStatus.APPROVED) {
       throw new ForbiddenException('Категория ещё не одобрена');
     }
-    if (category.sellerId && category.sellerId !== sellerId) {
+    if (
+      user.role !== Role.SUPER_ADMIN &&
+      category.sellerId &&
+      category.sellerId !== user.sellerId
+    ) {
       throw new ForbiddenException('Чужая категория продавца');
     }
     return category;
