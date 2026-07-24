@@ -19,7 +19,7 @@ type CartItemWithListing = Prisma.CartItemGetPayload<{
 export interface CartResponse {
   items: CartItemWithListing[];
   itemCount: number;
-  total: string;
+  total: number;
 }
 
 @Injectable()
@@ -104,12 +104,10 @@ export class CartService {
 
   private toResponse(items: CartItemWithListing[]): CartResponse {
     const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
-    const total = items
-      .reduce(
-        (sum, item) => sum + Number(item.listing.price) * item.quantity,
-        0,
-      )
-      .toFixed(2);
+    const total = items.reduce(
+      (sum, item) => sum + item.listing.price * item.quantity,
+      0,
+    );
     return { items, itemCount, total };
   }
 }

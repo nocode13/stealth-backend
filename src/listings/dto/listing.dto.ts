@@ -16,15 +16,13 @@ export class CreateListingDto {
   @IsString()
   catalogItemId: string;
 
-  @ApiProperty({ example: 25000 })
-  @IsNumber()
+  @ApiProperty({
+    description: 'Цена в тиинах (1 сум = 100 тиинов)',
+    example: 2500000,
+  })
+  @IsInt()
   @Min(0)
   price: number;
-
-  @ApiPropertyOptional({ example: 'UZS', default: 'UZS' })
-  @IsOptional()
-  @IsString()
-  currency?: string;
 
   @ApiProperty({ example: 100 })
   @IsInt()
@@ -56,14 +54,14 @@ export class FindListingsQueryDto extends CursorPaginationDto {
   @IsEnum(ListingStatus)
   status?: ListingStatus;
 
-  @ApiPropertyOptional({ example: 10000 })
+  @ApiPropertyOptional({ description: 'В тиинах', example: 1000000 })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(0)
   minPrice?: number;
 
-  @ApiPropertyOptional({ example: 100000 })
+  @ApiPropertyOptional({ description: 'В тиинах', example: 10000000 })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()

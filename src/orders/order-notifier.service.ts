@@ -11,8 +11,9 @@ import {
   ORDER_STATUS_LABELS,
 } from './order-status';
 
-const money = (value: unknown): string =>
-  Number(value).toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+// Значения приходят в тиинах (1 сум = 100 тиинов) — делим на 100 перед показом.
+const money = (tiyin: number): string =>
+  (tiyin / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
 
 const escapeHtml = (text: string): string =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -54,10 +55,10 @@ export class OrderNotifier {
         (item) =>
           `• ${escapeHtml(item.catalogItemName)} — ${item.quantity} ${escapeHtml(
             item.unit,
-          )} × ${money(item.price)} = ${money(item.total)} ${order.currency}`,
+          )} × ${money(item.price)} = ${money(item.total)}`,
       ),
       '',
-      `<b>Итого: ${money(order.total)} ${order.currency}</b>`,
+      `<b>Итого: ${money(order.total)}</b>`,
       `Оплата: наличными курьеру`,
       '',
       `👤 ${escapeHtml(order.contactName)}`,

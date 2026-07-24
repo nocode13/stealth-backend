@@ -21,7 +21,7 @@ const withCatalog = {
 function buildPriceFilter(
   minPrice?: number,
   maxPrice?: number,
-): Prisma.DecimalFilter | undefined {
+): Prisma.IntFilter | undefined {
   if (minPrice === undefined && maxPrice === undefined) return undefined;
   return { gte: minPrice, lte: maxPrice };
 }

@@ -227,8 +227,7 @@ model Listing {
   seller        Seller        @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   catalogItemId String
   catalogItem   CatalogItem   @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
-  price         Decimal       @db.Decimal(12, 2)
-  currency      String        @default("UZS")
+  price         Int
   stock         Int           @default(0)
   status        ListingStatus @default(DRAFT)
   createdAt     DateTime      @default(now())
@@ -284,10 +283,9 @@ model Order {
   paymentMethod PaymentMethod @default(CASH)
   paymentStatus PaymentStatus @default(PENDING)
 
-  itemsTotal  Decimal @db.Decimal(12, 2)
-  deliveryFee Decimal @default(0) @db.Decimal(12, 2)
-  total       Decimal @db.Decimal(12, 2)
-  currency    String  @default("UZS")
+  itemsTotal  Int
+  deliveryFee Int @default(0)
+  total       Int
 
   contactName  String
   contactPhone String
@@ -338,9 +336,9 @@ model OrderItem {
   catalogItemImageUrl String?
   unit                String  @default("шт")
 
-  price    Decimal @db.Decimal(12, 2)
+  price    Int
   quantity Int
-  total    Decimal @db.Decimal(12, 2)
+  total    Int
 
   createdAt DateTime @default(now())
 

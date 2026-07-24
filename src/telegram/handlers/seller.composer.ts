@@ -193,7 +193,6 @@ export class SellerComposer {
         orderNumber: true,
         status: true,
         total: true,
-        currency: true,
         contactName: true,
       },
     });
@@ -209,9 +208,9 @@ export class SellerComposer {
     for (const order of orders) {
       keyboard
         .text(
-          `#${order.orderNumber} · ${ORDER_STATUS_LABELS[order.status]} · ${Number(
-            order.total,
-          ).toLocaleString('ru-RU')} ${order.currency}`,
+          `#${order.orderNumber} · ${ORDER_STATUS_LABELS[order.status]} · ${(
+            order.total / 100
+          ).toLocaleString('ru-RU')}`,
           `sel:show:${order.id}`,
         )
         .row();

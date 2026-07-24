@@ -117,9 +117,8 @@ export class OrdersService {
         }
 
         const itemsTotal = items.reduce(
-          (sum, item) =>
-            sum.add(new Prisma.Decimal(item.listing.price).mul(item.quantity)),
-          new Prisma.Decimal(0),
+          (sum, item) => sum + item.listing.price * item.quantity,
+          0,
         );
 
         const order = await tx.order.create({
@@ -146,9 +145,7 @@ export class OrdersService {
                 unit: item.listing.catalogItem.unit,
                 price: item.listing.price,
                 quantity: item.quantity,
-                total: new Prisma.Decimal(item.listing.price).mul(
-                  item.quantity,
-                ),
+                total: item.listing.price * item.quantity,
               })),
             },
             history: { create: { status: OrderStatus.NEW } },
