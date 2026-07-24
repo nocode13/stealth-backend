@@ -1,4 +1,9 @@
-import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BotSessionPurpose, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
@@ -7,10 +12,7 @@ import { isStaffRole } from '../common/telegram-identity';
 
 /** Исход привязки: под каждый — свой текст в чате, см. telegram-identity.ts. */
 export type LinkSellerResult =
-  | 'ok'
-  | 'expired'
-  | 'takenByCustomer'
-  | 'takenByStaff';
+  'ok' | 'expired' | 'takenByCustomer' | 'takenByStaff';
 
 export interface BotLinkCreated {
   nonce: string;
@@ -77,8 +79,14 @@ export class TelegramLinkService {
   // ─────────────────────────── адрес доставки ───────────────────────────
 
   /** Бот получил /start loc_<nonce>: помечаем, кто именно сейчас шлёт локацию. */
-  async attachLocationRequest(nonce: string, telegramId: string): Promise<boolean> {
-    const session = await this.findLive(nonce, BotSessionPurpose.DELIVERY_LOCATION);
+  async attachLocationRequest(
+    nonce: string,
+    telegramId: string,
+  ): Promise<boolean> {
+    const session = await this.findLive(
+      nonce,
+      BotSessionPurpose.DELIVERY_LOCATION,
+    );
     if (!session) return false;
     // Сверяем, что бота открыл владелец сессии, а не тот, кому переслали ссылку.
     const user = await this.prisma.user.findUnique({
@@ -165,7 +173,9 @@ export class TelegramLinkService {
 
     // Разбираем, КЕМ занят Telegram, до апдейта: P2002 знает только «занято»,
     // а покупателю и владельцу другого магазина нужны разные объяснения.
-    const occupant = await this.prisma.user.findUnique({ where: { telegramId } });
+    const occupant = await this.prisma.user.findUnique({
+      where: { telegramId },
+    });
     if (occupant && occupant.id !== session.userId) {
       this.logger.warn(
         `Привязка отклонена: telegramId=${telegramId} занят ${occupant.role}-аккаунтом.`,
@@ -209,7 +219,9 @@ export class TelegramLinkService {
   async assertTelegramFree(telegramId: string, userId: string): Promise<void> {
     const owner = await this.prisma.user.findUnique({ where: { telegramId } });
     if (owner && owner.id !== userId) {
-      throw new ConflictException('Этот Telegram уже привязан к другому аккаунту');
+      throw new ConflictException(
+        'Этот Telegram уже привязан к другому аккаунту',
+      );
     }
   }
 

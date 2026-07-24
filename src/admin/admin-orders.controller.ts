@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
 import { AuthenticatedGuard } from '../auth/guards/authenticated.guard';
@@ -24,7 +32,9 @@ export class AdminOrdersController {
   constructor(private readonly orders: OrdersService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Заказы: фильтр по статусу, поиск по номеру/контакту' })
+  @ApiOperation({
+    summary: 'Заказы: фильтр по статусу, поиск по номеру/контакту',
+  })
   findAll(@Query() query: FindOrdersQueryDto, @CurrentUser() user: AuthUser) {
     return this.orders.findAllForStaff(user, query);
   }

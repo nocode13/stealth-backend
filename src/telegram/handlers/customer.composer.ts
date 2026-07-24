@@ -7,7 +7,8 @@ import { TelegramLinkService } from '../telegram-link.service';
 
 const REPLY_BY_LOGIN_RESULT: Record<'ok' | 'expired' | 'staff', string> = {
   ok: 'Готово, вы вошли — возвращайтесь в приложение.',
-  expired: 'Ссылка для входа устарела. Откройте приложение и попробуйте ещё раз.',
+  expired:
+    'Ссылка для входа устарела. Откройте приложение и попробуйте ещё раз.',
   staff: STAFF_CANNOT_SHOP,
 };
 
@@ -56,13 +57,18 @@ export class CustomerComposer {
           );
           return;
         }
-        await ctx.reply('Нажмите кнопку ниже, чтобы отправить адрес доставки:', {
-          reply_markup: {
-            keyboard: [[{ text: '📍 Отправить локацию', request_location: true }]],
-            resize_keyboard: true,
-            one_time_keyboard: true,
+        await ctx.reply(
+          'Нажмите кнопку ниже, чтобы отправить адрес доставки:',
+          {
+            reply_markup: {
+              keyboard: [
+                [{ text: '📍 Отправить локацию', request_location: true }],
+              ],
+              resize_keyboard: true,
+              one_time_keyboard: true,
+            },
           },
-        });
+        );
         return;
       }
 

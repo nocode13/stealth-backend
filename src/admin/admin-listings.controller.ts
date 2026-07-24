@@ -42,7 +42,9 @@ export class AdminListingsController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Мои листинги (SUPER_ADMIN может смотреть чужие через ?sellerId=)' })
+  @ApiOperation({
+    summary: 'Мои листинги (SUPER_ADMIN может смотреть чужие через ?sellerId=)',
+  })
   findAll(@Query() query: FindListingsQueryDto, @CurrentUser() user: AuthUser) {
     const sellerId =
       user.role === Role.SUPER_ADMIN && query.sellerId

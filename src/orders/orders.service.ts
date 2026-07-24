@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto';
 import type { AuthPrincipal } from '../common/decorators/current-user.decorator';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
+import { AddressesService } from '../addresses/addresses.service';
 import { OrderNotifier } from './order-notifier.service';
 import {
   CancelOrderDto,
@@ -39,6 +40,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifier: OrderNotifier,
+    private readonly addresses: AddressesService,
   ) {}
 
   // ─────────────────────────────── создание ───────────────────────────────
@@ -60,6 +62,17 @@ export class OrdersService {
     if (cartItems.length === 0) {
       throw new BadRequestException('Корзина пуста');
     }
+
+    // savedAddressId — источник правды для снапшота ниже, сырые deliveryAddress/...
+    // в этом случае игнорируются (клиент их и не шлёт, см. CreateOrderDto).
+    const addressSnapshot = dto.savedAddressId
+      ? await this.resolveSavedAddress(userId, dto.savedAddressId)
+      : {
+          address: dto.deliveryAddress,
+          comment: dto.deliveryComment,
+          lat: dto.deliveryLat,
+          lng: dto.deliveryLng,
+        };
 
     // Проверяем доступность до транзакции, чтобы отдать понятную ошибку с названием
     // товара. Финальную защиту от гонки даёт условный decrement ниже.
@@ -120,10 +133,11 @@ export class OrdersService {
             total: itemsTotal,
             contactName: dto.contactName,
             contactPhone: dto.contactPhone,
-            deliveryAddress: dto.deliveryAddress,
-            deliveryComment: dto.deliveryComment,
-            deliveryLat: dto.deliveryLat,
-            deliveryLng: dto.deliveryLng,
+            deliveryAddress: addressSnapshot.address,
+            deliveryComment: addressSnapshot.comment,
+            deliveryLat: addressSnapshot.lat,
+            deliveryLng: addressSnapshot.lng,
+            savedAddressId: dto.savedAddressId,
             items: {
               create: items.map((item) => ({
                 listingId: item.listingId,
@@ -132,7 +146,9 @@ export class OrdersService {
                 unit: item.listing.catalogItem.unit,
                 price: item.listing.price,
                 quantity: item.quantity,
-                total: new Prisma.Decimal(item.listing.price).mul(item.quantity),
+                total: new Prisma.Decimal(item.listing.price).mul(
+                  item.quantity,
+                ),
               })),
             },
             history: { create: { status: OrderStatus.NEW } },
@@ -140,6 +156,21 @@ export class OrdersService {
           include: withDetails,
         });
         created.push(order);
+      }
+
+      // Один раз на весь чекаут (не на каждого продавца), внутри той же транзакции —
+      // конфликтов уникальности тут нет, в отличие от бэкфилла телефона ниже.
+      if (dto.saveAddress && !dto.savedAddressId) {
+        await tx.savedAddress.create({
+          data: {
+            userId,
+            label: null,
+            address: addressSnapshot.address,
+            comment: addressSnapshot.comment,
+            lat: addressSnapshot.lat,
+            lng: addressSnapshot.lng,
+          },
+        });
       }
 
       await tx.cartItem.deleteMany({ where: { userId } });
@@ -155,6 +186,24 @@ export class OrdersService {
     await this.notifier.orderCreated(orders);
 
     return orders;
+  }
+
+  private async resolveSavedAddress(
+    userId: string,
+    savedAddressId: string,
+  ): Promise<{
+    address: string;
+    comment?: string;
+    lat?: number;
+    lng?: number;
+  }> {
+    const saved = await this.addresses.findOwned(userId, savedAddressId);
+    return {
+      address: saved.address,
+      comment: saved.comment ?? undefined,
+      lat: saved.lat ?? undefined,
+      lng: saved.lng ?? undefined,
+    };
   }
 
   private async backfillProfilePhone(
@@ -376,7 +425,10 @@ export class OrdersService {
     return { sellerId: user.sellerId };
   }
 
-  private assertStaffAccess(user: AuthPrincipal, order: OrderWithDetails): void {
+  private assertStaffAccess(
+    user: AuthPrincipal,
+    order: OrderWithDetails,
+  ): void {
     if (user.role === Role.SUPER_ADMIN) return;
     if (!user.sellerId || order.sellerId !== user.sellerId) {
       throw new ForbiddenException('Чужой заказ');

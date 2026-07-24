@@ -89,6 +89,7 @@ model User {
   refreshTokens RefreshToken[]
   cartItems    CartItem[]
   orders       Order[]
+  savedAddresses SavedAddress[]
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -297,6 +298,10 @@ model Order {
   // но именно они дают курьеру кнопку «Маршрут» в карточке локации.
   deliveryLat     Float?
   deliveryLng     Float?
+  // Не источник правды для полей выше — только трейсинг «каким сохранённым адресом
+  // пользовались». Адрес можно отредактировать/удалить, снапшот заказа не меняется.
+  savedAddressId  String?
+  savedAddress    SavedAddress? @relation(fields: [savedAddressId], references: [id], onDelete: SetNull)
 
   // Задел под курьерскую систему: позже заменяется на courierId → модель Courier.
   courierName  String?
@@ -358,4 +363,27 @@ model OrderStatusHistory {
 
   @@index([orderId])
   @@map("order_status_history")
+}
+
+// Адресная книга покупателя. Order на неё не полагается как на источник правды —
+// у Order всегда свой снапшот (deliveryAddress/deliveryComment/deliveryLat/deliveryLng),
+// эта модель только даёт переиспользовать адрес между заказами и подставлять его в checkout.
+model SavedAddress {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  label   String? // "Дом" / "Работа" — необязательно, пользователь не всегда называет адрес
+  address String
+  comment String?
+  lat     Float?
+  lng     Float?
+
+  orders Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("saved_addresses")
 }

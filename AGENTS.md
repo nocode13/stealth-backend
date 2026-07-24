@@ -79,6 +79,7 @@ src/
   telegram/        # Бот (grammy): bootstrap + композеры-хендлеры + исходящие (см. «Telegram»)
   users/           # UsersService (поиск/создание/профиль/пароль)
   cart/            # CartService — корзина покупателя
+  addresses/       # AddressesService — адресная книга покупателя (сохранённые адреса)
   orders/          # OrdersService — заказы, карта переходов статусов, уведомления
   sellers/         # SellersService (продавцы = арендаторы)
   categories/      # CategoriesService — категории (master + предложенные продавцом)
@@ -129,6 +130,13 @@ src/
   намеренно оставлена отдельной — она выдаёт токены и консьюмится иначе.
 - **CartItem** — позиция корзины прямо на `User`, без обёртки `Cart`: у пользователя неявно
   одна корзина, отдельная сущность не нужна (та же логика, что у `RefreshToken`).
+- **SavedAddress** — адресная книга покупателя (`label?`, `address`, `comment?`, `lat?`/`lng?`),
+  `onDelete: Cascade` от `User`. **Не источник правды для отображения заказа** — `Order` держит
+  свой снапшот (`deliveryAddress/deliveryComment/deliveryLat/deliveryLng`) и лишь опциональный
+  `savedAddressId` (`onDelete: SetNull`) для трейсинга «каким сохранённым адресом пользовались».
+  Редактирование или удаление `SavedAddress` задним числом не меняет уже оформленные заказы —
+  тот же принцип, что у `OrderItem` (снапшот `Listing`) и `Order.contactName/contactPhone`
+  (снапшот `User.name/phone`).
 - **Order / OrderItem / OrderStatusHistory** — см. раздел «Заказы».
 
 ## Заказы
@@ -174,6 +182,18 @@ NEW → CONFIRMED → ASSEMBLING → DELIVERING → ARRIVED → DELIVERED
 локации своему курьеру (пересылка сохраняет геоточку). Поля `courierName`/`courierPhone` —
 задел: когда появится модель `Courier`, тот же `sendMessage` + `sendLocation` пойдёт ему напрямую.
 
+**Адресная книга (`SavedAddress`) и снапшот в `CreateOrderDto`.** Покупатель может оформить
+заказ либо сырыми полями (`deliveryAddress`/`deliveryComment`/`deliveryLat`/`deliveryLng`), либо
+сославшись на сохранённый адрес (`savedAddressId`) — тогда сырые поля игнорируются, а
+`deliveryAddress` условно необязателен (`@ValidateIf((o) => !o.savedAddressId)`). Опциональный
+флаг `saveAddress: boolean` (только в паре с сырыми полями, не с `savedAddressId`) создаёт новую
+`SavedAddress` **внутри той же `$transaction`**, что и заказ — конфликтов уникальности тут нет
+(в отличие от бэкфилла телефона ниже), поэтому отдельного пост-коммитного шага не нужно.
+`OrdersService.createFromCart` резолвит адрес **один раз на весь checkout** (до цикла по
+продавцам) и копирует один и тот же снапшот во все N заказов группы — `savedAddressId`
+принадлежность проверяет `AddressesService.findOwned` (публичный метод, переиспользуется отсюда
+же).
+
 Эндпоинты:
 
 - `POST /mobile/orders` — оформить корзину → массив заказов. **Class-level `JwtAuthGuard`**,
@@ -182,6 +202,9 @@ NEW → CONFIRMED → ASSEMBLING → DELIVERING → ARRIVED → DELIVERED
   (покупатель отменяет только из `NEW`/`CONFIRMED`)
 - `POST /mobile/orders/delivery/location/session` + `GET …/:nonce` — nonce и поллинг адреса.
   **Объявлены в контроллере раньше `:id`-роутов**, иначе `GET /mobile/orders/:id` их перехватит.
+- `GET/POST /mobile/addresses`, `PATCH/DELETE /mobile/addresses/:id` — CRUD адресной книги
+  (`MobileAddressesController`, class-level `JwtAuthGuard`, всё scoped по `userId` в
+  `AddressesService`, тот же паттерн, что `MobileCartController`/`CartService`).
 - `GET /admin/orders` (фильтр `status`, поиск по номеру/телефону/имени), `GET /admin/orders/:id`,
   `PATCH /admin/orders/:id/status`, `PATCH /admin/orders/:id/courier` —
   `AuthenticatedGuard + RolesGuard`, `@Roles(SELLER, SUPER_ADMIN)`. `SELLER` жёстко скоупится

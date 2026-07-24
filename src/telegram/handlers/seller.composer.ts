@@ -11,22 +11,25 @@ import {
   CUSTOMER_CANNOT_BE_STAFF,
   TELEGRAM_TAKEN_BY_STAFF,
 } from '../../common/telegram-identity';
-import { TelegramLinkService, type LinkSellerResult } from '../telegram-link.service';
+import {
+  TelegramLinkService,
+  type LinkSellerResult,
+} from '../telegram-link.service';
 
 const PAGE_SIZE = 5;
 
 // Статусы, которые продавец считает «в работе» — их показывает вкладка «В доставке».
-const IN_DELIVERY: OrderStatus[] = [OrderStatus.DELIVERING, OrderStatus.ARRIVED];
+const IN_DELIVERY: OrderStatus[] = [
+  OrderStatus.DELIVERING,
+  OrderStatus.ARRIVED,
+];
 const ACTIVE: OrderStatus[] = [
   OrderStatus.NEW,
   OrderStatus.CONFIRMED,
   OrderStatus.ASSEMBLING,
 ];
 
-const REPLY_BY_LINK_RESULT: Record<
-  Exclude<LinkSellerResult, 'ok'>,
-  string
-> = {
+const REPLY_BY_LINK_RESULT: Record<Exclude<LinkSellerResult, 'ok'>, string> = {
   expired: 'Ссылка привязки устарела. Сгенерируйте новую в админке.',
   takenByCustomer: CUSTOMER_CANNOT_BE_STAFF,
   takenByStaff: TELEGRAM_TAKEN_BY_STAFF,
@@ -75,9 +78,12 @@ export class SellerComposer {
         await ctx.reply(REPLY_BY_LINK_RESULT[result]);
         return;
       }
-      await ctx.reply('✅ Telegram привязан. Теперь заказы будут приходить сюда.', {
-        reply_markup: menuKeyboard,
-      });
+      await ctx.reply(
+        '✅ Telegram привязан. Теперь заказы будут приходить сюда.',
+        {
+          reply_markup: menuKeyboard,
+        },
+      );
     });
 
     // /start без payload от продавца — меню кабинета. Всем остальным (покупателям)
@@ -98,8 +104,12 @@ export class SellerComposer {
       const seller = await this.resolveSeller(ctx);
       if (!seller) return this.denyCallback(ctx);
 
-      const kind = ctx.match![1];
-      await this.sendOrderList(ctx, seller, kind === 'active' ? ACTIVE : IN_DELIVERY);
+      const kind = ctx.match[1];
+      await this.sendOrderList(
+        ctx,
+        seller,
+        kind === 'active' ? ACTIVE : IN_DELIVERY,
+      );
     });
 
     // Открыть карточку конкретного заказа.
@@ -109,7 +119,10 @@ export class SellerComposer {
       if (!seller) return this.denyCallback(ctx);
 
       try {
-        const order = await this.orders.findOneForStaff(seller.principal, ctx.match![1]);
+        const order = await this.orders.findOneForStaff(
+          seller.principal,
+          ctx.match[1],
+        );
         const { text, keyboard } = this.notifier.buildSellerCard(order);
         await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
       } catch (error) {
@@ -122,20 +135,30 @@ export class SellerComposer {
     composer.callbackQuery(/^ord:([^:]+):(.+)$/, async (ctx) => {
       const seller = await this.resolveSeller(ctx);
       if (!seller) {
-        await ctx.answerCallbackQuery({ text: 'Недостаточно прав', show_alert: true });
+        await ctx.answerCallbackQuery({
+          text: 'Недостаточно прав',
+          show_alert: true,
+        });
         return;
       }
 
-      const [, orderId, status] = ctx.match!;
+      const [, orderId, status] = ctx.match;
       if (!Object.values(OrderStatus).includes(status as OrderStatus)) {
-        await ctx.answerCallbackQuery({ text: 'Неизвестный статус', show_alert: true });
+        await ctx.answerCallbackQuery({
+          text: 'Неизвестный статус',
+          show_alert: true,
+        });
         return;
       }
 
       try {
-        const updated = await this.orders.changeStatus(seller.principal, orderId, {
-          status: status as OrderStatus,
-        });
+        const updated = await this.orders.changeStatus(
+          seller.principal,
+          orderId,
+          {
+            status: status as OrderStatus,
+          },
+        );
         await ctx.answerCallbackQuery({
           text: `Статус: ${ORDER_STATUS_LABELS[updated.status]}`,
         });
@@ -176,7 +199,9 @@ export class SellerComposer {
     });
 
     if (orders.length === 0) {
-      await ctx.reply('Заказов в этом разделе нет.', { reply_markup: menuKeyboard });
+      await ctx.reply('Заказов в этом разделе нет.', {
+        reply_markup: menuKeyboard,
+      });
       return;
     }
 
@@ -192,7 +217,9 @@ export class SellerComposer {
         .row();
     }
 
-    await ctx.reply(`Найдено заказов: ${orders.length}`, { reply_markup: keyboard });
+    await ctx.reply(`Найдено заказов: ${orders.length}`, {
+      reply_markup: keyboard,
+    });
   }
 
   /**
@@ -205,7 +232,8 @@ export class SellerComposer {
       where: { telegramId: String(ctx.from.id) },
     });
     if (!user) return null;
-    if (user.role !== Role.SELLER && user.role !== Role.SUPER_ADMIN) return null;
+    if (user.role !== Role.SELLER && user.role !== Role.SUPER_ADMIN)
+      return null;
     if (user.role === Role.SELLER && !user.sellerId) return null;
 
     const seller = user.sellerId

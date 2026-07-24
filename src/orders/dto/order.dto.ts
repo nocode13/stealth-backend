@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { OrderStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEnum,
   IsLatitude,
   IsLongitude,
@@ -10,6 +11,7 @@ import {
   IsString,
   Matches,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 import { CursorPaginationDto } from '../../common/dto/pagination.dto';
 
@@ -27,7 +29,18 @@ export class CreateOrderDto {
   @Matches(E164, { message: 'Телефон в формате +998901234567' })
   contactPhone!: string;
 
+  // Если задан savedAddressId — сервис подтягивает сохранённый адрес и игнорирует
+  // сырые deliveryAddress/deliveryComment/deliveryLat/deliveryLng ниже.
+  @ApiPropertyOptional({
+    description:
+      'ID сохранённого адреса — если задан, deliveryAddress/... игнорируются',
+  })
+  @IsOptional()
+  @IsString()
+  savedAddressId?: string;
+
   @ApiProperty({ example: 'Ташкент, Чиланзар 12-45' })
+  @ValidateIf((o: CreateOrderDto) => !o.savedAddressId)
   @IsString()
   @IsNotEmpty({ message: 'Укажите адрес доставки' })
   @MaxLength(500)
@@ -52,6 +65,14 @@ export class CreateOrderDto {
   @Type(() => Number)
   @IsLongitude()
   deliveryLng?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Сохранить введённый адрес в адресную книгу (игнорируется при savedAddressId)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  saveAddress?: boolean;
 
   // paymentMethod намеренно нет: способ оплаты пока один (CASH), сервис ставит его сам.
   // Когда появится Payme/Click — поле добавится опциональным, и старые клиенты не сломаются.

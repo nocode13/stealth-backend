@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { BotSessionPurpose } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -33,13 +41,17 @@ export class MobileOrdersController {
     description: 'Возвращает ссылку на бота; бот попросит геопозицию кнопкой.',
   })
   createLocationSession(@CurrentUser('id') userId: string) {
-    return this.links.createSession(userId, BotSessionPurpose.DELIVERY_LOCATION);
+    return this.links.createSession(
+      userId,
+      BotSessionPurpose.DELIVERY_LOCATION,
+    );
   }
 
   @Get('delivery/location/session/:nonce')
   @ApiOperation({
     summary: 'Поллинг адреса',
-    description: 'pending → ждём | received → координаты | expired → начать заново',
+    description:
+      'pending → ждём | received → координаты | expired → начать заново',
   })
   pollLocationSession(
     @CurrentUser('id') userId: string,

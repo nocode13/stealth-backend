@@ -10,10 +10,7 @@ import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
-import {
-  isStaffRole,
-  STAFF_CANNOT_SHOP,
-} from '../common/telegram-identity';
+import { isStaffRole, STAFF_CANNOT_SHOP } from '../common/telegram-identity';
 
 export interface TokenPair {
   accessToken: string;

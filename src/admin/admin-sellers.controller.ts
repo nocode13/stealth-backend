@@ -55,7 +55,9 @@ export class AdminSellersController {
   }
 
   @Post()
-  @ApiOperation({ summary: 'Создать продавца (+ владелец с логином в админку)' })
+  @ApiOperation({
+    summary: 'Создать продавца (+ владелец с логином в админку)',
+  })
   create(@Body() dto: CreateSellerDto) {
     return this.sellers.create(dto);
   }
@@ -92,7 +94,11 @@ export class AdminSellersController {
     if (!file) throw new BadRequestException('Файл не передан');
     const ext = file.originalname.split('.').pop();
     const key = `sellers/${id}-${Date.now()}${ext ? `.${ext}` : ''}`;
-    const bannerUrl = await this.storage.upload(key, file.buffer, file.mimetype);
+    const bannerUrl = await this.storage.upload(
+      key,
+      file.buffer,
+      file.mimetype,
+    );
     return this.sellers.updateBanner(id, bannerUrl);
   }
 }
