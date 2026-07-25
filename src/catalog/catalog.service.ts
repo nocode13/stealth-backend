@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { CatalogItem, Prisma, ReviewStatus, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CategoriesService } from '../categories/categories.service';
@@ -24,6 +25,7 @@ export class CatalogService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly categories: CategoriesService,
+    private readonly storage: StorageService,
   ) {}
 
   // Витрина (мобилка): только одобренные позиции, master и чужие продавцы вперемешку.
@@ -153,11 +155,28 @@ export class CatalogService {
     if (user.role !== Role.SUPER_ADMIN && item.sellerId !== user.sellerId) {
       throw new ForbiddenException('Чужая позиция справочника');
     }
+
+    if (item.imageUrl) {
+      const oldKey = this.extractKeyFromUrl(item.imageUrl);
+      if (oldKey) {
+        this.storage.delete(oldKey).catch(() => {});
+      }
+    }
+
     return this.prisma.catalogItem.update({
       where: { id },
       data: { imageUrl },
       include: withCategory,
     });
+  }
+
+  private extractKeyFromUrl(url: string): string | null {
+    try {
+      const match = url.match(/catalog\/(.+)$/);
+      return match ? match[1] : null;
+    } catch {
+      return null;
+    }
   }
 
   // Используется ListingsService: продавец может продавать только по одобренной

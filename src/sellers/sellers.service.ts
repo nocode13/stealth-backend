@@ -6,6 +6,7 @@ import {
 import { Prisma, Role, Seller, SellerStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import {
   CreateSellerDto,
@@ -15,7 +16,10 @@ import {
 
 @Injectable()
 export class SellersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
 
   async findAll(query: FindSellersQueryDto): Promise<CursorPage<Seller>> {
     const rows = await this.prisma.seller.findMany({
@@ -99,7 +103,28 @@ export class SellersService {
     return this.prisma.seller.update({ where: { id }, data: dto });
   }
 
-  updateBanner(id: string, bannerUrl: string): Promise<Seller> {
+  async updateBanner(id: string, bannerUrl: string): Promise<Seller> {
+    const seller = await this.prisma.seller.findUnique({ where: { id } });
+    if (!seller) {
+      throw new NotFoundException('Продавец не найден');
+    }
+
+    if (seller.bannerUrl) {
+      const oldKey = this.extractKeyFromUrl(seller.bannerUrl);
+      if (oldKey) {
+        this.storage.delete(oldKey).catch(() => {});
+      }
+    }
+
     return this.prisma.seller.update({ where: { id }, data: { bannerUrl } });
+  }
+
+  private extractKeyFromUrl(url: string): string | null {
+    try {
+      const match = url.match(/sellers\/(.+)$/);
+      return match ? match[1] : null;
+    } catch {
+      return null;
+    }
   }
 }
