@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, Role, Seller, SellerStatus } from '@prisma/client';
@@ -16,6 +17,8 @@ import {
 
 @Injectable()
 export class SellersService {
+  private readonly logger = new Logger(SellersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
@@ -110,21 +113,14 @@ export class SellersService {
     }
 
     if (seller.bannerUrl) {
-      const oldKey = this.extractKeyFromUrl(seller.bannerUrl);
+      const oldKey = this.storage.keyFromUrl(seller.bannerUrl);
       if (oldKey) {
-        this.storage.delete(oldKey).catch(() => {});
+        this.storage.delete(oldKey).catch((e: unknown) => {
+          this.logger.warn(`Не удалось удалить старый баннер ${oldKey}`, e);
+        });
       }
     }
 
     return this.prisma.seller.update({ where: { id }, data: { bannerUrl } });
-  }
-
-  private extractKeyFromUrl(url: string): string | null {
-    try {
-      const match = url.match(/sellers\/(.+)$/);
-      return match ? match[1] : null;
-    } catch {
-      return null;
-    }
   }
 }

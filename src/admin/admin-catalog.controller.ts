@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
+  ApiBody,
   ApiCookieAuth,
   ApiConsumes,
   ApiOperation,
@@ -28,6 +29,8 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
 import { CatalogService } from '../catalog/catalog.service';
 import { StorageService } from '../storage/storage.service';
+import { ImageService } from '../storage/image.service';
+import { imageUploadBody, imageUploadOptions } from './upload.options';
 import {
   CreateCatalogItemDto,
   FindCatalogQueryDto,
@@ -45,6 +48,7 @@ export class AdminCatalogController {
   constructor(
     private readonly catalog: CatalogService,
     private readonly storage: StorageService,
+    private readonly image: ImageService,
   ) {}
 
   @Get()
@@ -87,31 +91,19 @@ export class AdminCatalogController {
   @Post(':id/image')
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Загрузить фото позиции справочника' })
-  @UseInterceptors(
-    FileInterceptor('file', {
-      // storage не указан -> multer использует memoryStorage, на диск не пишем
-      limits: { fileSize: 5 * 1024 * 1024 },
-      fileFilter: (_req, file, callback) => {
-        if (!file.mimetype.startsWith('image/')) {
-          callback(
-            new BadRequestException('Файл должен быть изображением'),
-            false,
-          );
-          return;
-        }
-        callback(null, true);
-      },
-    }),
-  )
+  @ApiBody(imageUploadBody)
+  @UseInterceptors(FileInterceptor('file', imageUploadOptions))
   async uploadImage(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() user: AuthUser,
   ) {
     if (!file) throw new BadRequestException('Файл не передан');
-    const ext = file.originalname.split('.').pop();
-    const key = `catalog/${id}-${Date.now()}${ext ? `.${ext}` : ''}`;
-    const imageUrl = await this.storage.upload(key, file.buffer, file.mimetype);
+    // Расширение и Content-Type берём из результата конвертации, а не из
+    // originalname/mimetype — те приходят от клиента и ничем не подтверждены.
+    const { buffer, contentType, ext } = await this.image.toWebp(file.buffer);
+    const key = `catalog/${id}-${Date.now()}.${ext}`;
+    const imageUrl = await this.storage.upload(key, buffer, contentType);
     return this.catalog.updateImage(id, imageUrl, user);
   }
 }

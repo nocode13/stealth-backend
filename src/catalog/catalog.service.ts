@@ -2,6 +2,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { CatalogItem, Prisma, ReviewStatus, Role } from '@prisma/client';
@@ -22,6 +23,8 @@ const withCategory = {
 
 @Injectable()
 export class CatalogService {
+  private readonly logger = new Logger(CatalogService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly categories: CategoriesService,
@@ -157,9 +160,11 @@ export class CatalogService {
     }
 
     if (item.imageUrl) {
-      const oldKey = this.extractKeyFromUrl(item.imageUrl);
+      const oldKey = this.storage.keyFromUrl(item.imageUrl);
       if (oldKey) {
-        this.storage.delete(oldKey).catch(() => {});
+        this.storage.delete(oldKey).catch((e: unknown) => {
+          this.logger.warn(`Не удалось удалить старое фото ${oldKey}`, e);
+        });
       }
     }
 
@@ -168,15 +173,6 @@ export class CatalogService {
       data: { imageUrl },
       include: withCategory,
     });
-  }
-
-  private extractKeyFromUrl(url: string): string | null {
-    try {
-      const match = url.match(/catalog\/(.+)$/);
-      return match ? match[1] : null;
-    } catch {
-      return null;
-    }
   }
 
   // Используется ListingsService: продавец может продавать только по одобренной

@@ -45,6 +45,14 @@ export class StorageService {
     return `${this.publicUrl}/${key}`;
   }
 
+  // Обратная операция к upload(): вырезает ключ из публичной ссылки. Симметрия
+  // с upload() важна — publicUrl у MinIO содержит имя бакета в пути, у R2 нет,
+  // поэтому парсить ссылку регуляркой по префиксу папки (`catalog/…`) нельзя.
+  keyFromUrl(url: string): string | null {
+    const prefix = `${this.publicUrl}/`;
+    return url.startsWith(prefix) ? url.slice(prefix.length) : null;
+  }
+
   async delete(key: string): Promise<void> {
     await this.client.send(
       new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),

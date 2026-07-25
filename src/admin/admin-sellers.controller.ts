@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
+  ApiBody,
   ApiCookieAuth,
   ApiConsumes,
   ApiOperation,
@@ -24,6 +25,8 @@ import { AuthenticatedGuard } from '../auth/guards/authenticated.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { StorageService } from '../storage/storage.service';
+import { ImageService } from '../storage/image.service';
+import { imageUploadBody, imageUploadOptions } from './upload.options';
 import { SellersService } from '../sellers/sellers.service';
 import {
   CreateSellerDto,
@@ -41,6 +44,7 @@ export class AdminSellersController {
   constructor(
     private readonly sellers: SellersService,
     private readonly storage: StorageService,
+    private readonly image: ImageService,
   ) {}
 
   @Get()
@@ -71,34 +75,17 @@ export class AdminSellersController {
   @Post(':id/image')
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Загрузить баннер продавца' })
-  @UseInterceptors(
-    FileInterceptor('file', {
-      // storage не указан -> multer использует memoryStorage, на диск не пишем
-      limits: { fileSize: 5 * 1024 * 1024 },
-      fileFilter: (_req, file, callback) => {
-        if (!file.mimetype.startsWith('image/')) {
-          callback(
-            new BadRequestException('Файл должен быть изображением'),
-            false,
-          );
-          return;
-        }
-        callback(null, true);
-      },
-    }),
-  )
+  @ApiBody(imageUploadBody)
+  @UseInterceptors(FileInterceptor('file', imageUploadOptions))
   async uploadImage(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
   ) {
     if (!file) throw new BadRequestException('Файл не передан');
-    const ext = file.originalname.split('.').pop();
-    const key = `sellers/${id}-${Date.now()}${ext ? `.${ext}` : ''}`;
-    const bannerUrl = await this.storage.upload(
-      key,
-      file.buffer,
-      file.mimetype,
-    );
+    // Расширение и Content-Type — из результата конвертации, не из originalname.
+    const { buffer, contentType, ext } = await this.image.toWebp(file.buffer);
+    const key = `sellers/${id}-${Date.now()}.${ext}`;
+    const bannerUrl = await this.storage.upload(key, buffer, contentType);
     return this.sellers.updateBanner(id, bannerUrl);
   }
 }
