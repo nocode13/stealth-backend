@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -70,14 +71,15 @@ export class ListingsService {
     return listing;
   }
 
-  // Листинги конкретного продавца (админка).
+  // Листинги конкретного продавца (админка). sellerId === null — SUPER_ADMIN
+  // смотрит без скоупа: все листинги всех продавцов.
   async findForSeller(
-    sellerId: string,
+    sellerId: string | null,
     query: FindListingsQueryDto,
   ): Promise<CursorPage<Listing>> {
     const rows = await this.prisma.listing.findMany({
       where: {
-        sellerId,
+        sellerId: sellerId ?? undefined,
         status: query.status,
         price: buildPriceFilter(query.minPrice, query.maxPrice),
         catalogItem: {
@@ -96,29 +98,49 @@ export class ListingsService {
     return toCursorPage(rows, query.limit);
   }
 
-  async findOneForSeller(id: string, sellerId: string): Promise<Listing> {
+  // sellerId === null — SUPER_ADMIN, проверку владения пропускаем.
+  async findOneForSeller(
+    id: string,
+    sellerId: string | null,
+  ): Promise<Listing> {
     const listing = await this.prisma.listing.findUnique({
       where: { id },
       include: withCatalog,
     });
     if (!listing) throw new NotFoundException('Листинг не найден');
-    if (listing.sellerId !== sellerId) {
+    if (sellerId !== null && listing.sellerId !== sellerId) {
       throw new ForbiddenException('Чужой листинг');
     }
     return listing;
   }
 
   async create(sellerId: string, dto: CreateListingDto): Promise<Listing> {
-    await this.catalog.assertUsable(dto.catalogItemId, sellerId);
-    return this.prisma.listing.create({
-      data: { ...dto, sellerId },
-      include: withCatalog,
-    });
+    // sellerId из тела уже разрешён контроллером (SUPER_ADMIN выбирает продавца),
+    // в data он не должен попасть повторно.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { sellerId: _, ...data } = dto;
+    await this.catalog.assertUsable(data.catalogItemId, sellerId);
+    try {
+      return await this.prisma.listing.create({
+        data: { ...data, sellerId },
+        include: withCatalog,
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'У продавца уже есть позиция по этому товару',
+        );
+      }
+      throw error;
+    }
   }
 
   async update(
     id: string,
-    sellerId: string,
+    sellerId: string | null,
     dto: UpdateListingDto,
   ): Promise<Listing> {
     await this.findOneForSeller(id, sellerId);
@@ -129,7 +151,7 @@ export class ListingsService {
     });
   }
 
-  async remove(id: string, sellerId: string): Promise<void> {
+  async remove(id: string, sellerId: string | null): Promise<void> {
     await this.findOneForSeller(id, sellerId);
     await this.prisma.listing.delete({ where: { id } });
   }

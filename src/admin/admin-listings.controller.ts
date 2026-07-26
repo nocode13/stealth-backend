@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -41,26 +42,40 @@ export class AdminListingsController {
     return user.sellerId;
   }
 
+  // SUPER_ADMIN к продавцу не привязан и работает без скоупа (null); продавец —
+  // только со своими листингами.
+  private scope(user: AuthUser): string | null {
+    return user.role === Role.SUPER_ADMIN ? null : this.sellerId(user);
+  }
+
   @Get()
   @ApiOperation({
-    summary: 'Мои листинги (SUPER_ADMIN может смотреть чужие через ?sellerId=)',
+    summary:
+      'Мои листинги (SUPER_ADMIN видит все, ?sellerId= сужает до одного)',
   })
   findAll(@Query() query: FindListingsQueryDto, @CurrentUser() user: AuthUser) {
     const sellerId =
-      user.role === Role.SUPER_ADMIN && query.sellerId
-        ? query.sellerId
+      user.role === Role.SUPER_ADMIN
+        ? (query.sellerId ?? null)
         : this.sellerId(user);
     return this.listings.findForSeller(sellerId, query);
   }
 
   @Get(':id')
   findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.listings.findOneForSeller(id, this.sellerId(user));
+    return this.listings.findOneForSeller(id, this.scope(user));
   }
 
   @Post()
-  @ApiOperation({ summary: 'Создать листинг по позиции справочника' })
+  @ApiOperation({
+    summary:
+      'Создать листинг по позиции справочника (SUPER_ADMIN указывает sellerId)',
+  })
   create(@Body() dto: CreateListingDto, @CurrentUser() user: AuthUser) {
+    if (user.role === Role.SUPER_ADMIN) {
+      if (!dto.sellerId) throw new BadRequestException('Не выбран продавец');
+      return this.listings.create(dto.sellerId, dto);
+    }
     return this.listings.create(this.sellerId(user), dto);
   }
 
@@ -70,11 +85,11 @@ export class AdminListingsController {
     @Body() dto: UpdateListingDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.listings.update(id, this.sellerId(user), dto);
+    return this.listings.update(id, this.scope(user), dto);
   }
 
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.listings.remove(id, this.sellerId(user));
+    return this.listings.remove(id, this.scope(user));
   }
 }

@@ -1,4 +1,9 @@
-import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+  OmitType,
+  PartialType,
+} from '@nestjs/swagger';
 import { ListingStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
@@ -33,9 +38,22 @@ export class CreateListingDto {
   @IsOptional()
   @IsEnum(ListingStatus)
   status?: ListingStatus;
+
+  // SELLER всегда создаёт листинг себе (поле игнорируется), SUPER_ADMIN не привязан
+  // к продавцу и обязан указать его явно.
+  @ApiPropertyOptional({
+    description: 'Только для SUPER_ADMIN: продавец, которому создаётся листинг',
+  })
+  @IsOptional()
+  @IsString()
+  sellerId?: string;
 }
 
-export class UpdateListingDto extends PartialType(CreateListingDto) {}
+// sellerId в PATCH намеренно нет: перенос листинга между продавцами ломает
+// уникальность [sellerId, catalogItemId] и скоуп видимости.
+export class UpdateListingDto extends PartialType(
+  OmitType(CreateListingDto, ['sellerId'] as const),
+) {}
 
 export class FindListingsQueryDto extends CursorPaginationDto {
   @ApiPropertyOptional({ description: 'Поиск по названию позиции справочника' })
