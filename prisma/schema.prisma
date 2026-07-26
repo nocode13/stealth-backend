@@ -200,8 +200,10 @@ model CatalogItem {
   id          String       @id @default(cuid())
   name        String
   slug        String
-  categoryId  String
-  category    Category     @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  // Категория необязательна: позицию можно завести до того, как категория придумана
+  // или одобрена, и снять её позже (PATCH с categoryId: null).
+  categoryId  String?
+  category    Category?    @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   description String?
   imageUrl    String?
   unit        String       @default("шт") // единица измерения: шт, букет, упаковка...

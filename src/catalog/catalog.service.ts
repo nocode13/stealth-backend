@@ -39,7 +39,7 @@ export class CatalogService {
         name: query.search
           ? { contains: query.search, mode: 'insensitive' }
           : undefined,
-        categoryId: query.categoryId,
+        categoryId: query.noCategory ? null : query.categoryId,
       },
       include: withCategory,
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
@@ -61,7 +61,7 @@ export class CatalogService {
       name: query.search
         ? { contains: query.search, mode: 'insensitive' }
         : undefined,
-      categoryId: query.categoryId,
+      categoryId: query.noCategory ? null : query.categoryId,
       ...(isSuperAdmin
         ? { status: query.status, sellerId: query.sellerId }
         : {
@@ -95,7 +95,9 @@ export class CatalogService {
     dto: CreateCatalogItemDto,
     user: AuthUser,
   ): Promise<CatalogItem> {
-    await this.categories.assertUsable(dto.categoryId, user);
+    if (dto.categoryId) {
+      await this.categories.assertUsable(dto.categoryId, user);
+    }
     const isSuperAdmin = user.role === Role.SUPER_ADMIN;
     try {
       return await this.prisma.catalogItem.create({
