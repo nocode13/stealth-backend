@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InlineKeyboard } from 'grammy';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramNotifyService } from '../telegram/telegram-notify.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import type { OrderWithDetails } from './orders.service';
 import {
   ALLOWED_TRANSITIONS,
@@ -32,6 +33,7 @@ export class OrderNotifier {
   constructor(
     private readonly prisma: PrismaService,
     private readonly telegram: TelegramNotifyService,
+    private readonly notifications: NotificationsService,
     private readonly config: ConfigService,
   ) {}
 
@@ -110,10 +112,28 @@ export class OrderNotifier {
     }
   }
 
-  /** Статус поменял продавец → сообщаем покупателю. */
+  /**
+   * Статус поменял продавец → сообщаем покупателю по двум каналам.
+   *
+   * 1. Лента в БД — её читает мобилка поллингом. Обязательный канал: мобилка
+   *    работает как Telegram Mini App, и сообщение бота приходит в чат ПОД ней,
+   *    поэтому юзер, не сворачивая приложение, его не увидит.
+   * 2. Telegram-сообщение — для тех, кто сейчас не в приложении.
+   *
+   * Запись в ленту идёт ПЕРВОЙ и её ошибка не глотается: в отличие от чужого
+   * Telegram, локальный insert в Postgres обязан быть надёжным. Telegram, как и
+   * раньше, «мягкий» — падение внешнего сервиса не должно ронять смену статуса.
+   */
   async statusChanged(order: OrderWithDetails): Promise<void> {
     const message = CUSTOMER_STATUS_MESSAGES[order.status];
     if (!message) return;
+
+    await this.notifications.orderStatusChanged(order.userId, {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      status: order.status,
+    });
+
     try {
       const telegramId = await this.customerTelegramId(order.userId);
       await this.telegram.sendMessage(

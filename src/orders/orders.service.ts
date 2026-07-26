@@ -245,7 +245,7 @@ export class OrdersService {
     query: FindOrdersQueryDto,
   ): Promise<CursorPage<OrderWithDetails>> {
     const rows = await this.prisma.order.findMany({
-      where: { userId, status: query.status },
+      where: { userId, ...statusFilter(query.status) },
       include: withDetails,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       cursor: query.cursor ? { id: query.cursor } : undefined,
@@ -293,7 +293,7 @@ export class OrdersService {
     const rows = await this.prisma.order.findMany({
       where: {
         ...this.staffScope(user, query.sellerId),
-        status: query.status,
+        ...statusFilter(query.status),
         ...searchFilter(query.search),
       },
       include: withDetails,
@@ -458,6 +458,16 @@ export class OrdersService {
     this.assertStaffAccess(user, order);
     return order;
   }
+}
+
+/**
+ * Фильтр по статусам. Пустой массив трактуется как «без фильтра», а не как
+ * `{ in: [] }` — иначе `?status=` (пустая строка от клиента, который просто не
+ * выбрал фильтр) молча вернул бы ноль заказов вместо всех.
+ */
+function statusFilter(status?: OrderStatus[]): Prisma.OrderWhereInput {
+  if (!status?.length) return {};
+  return { status: status.length === 1 ? status[0] : { in: status } };
 }
 
 function searchFilter(search?: string): Prisma.OrderWhereInput {

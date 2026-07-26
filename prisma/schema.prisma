@@ -60,6 +60,15 @@ enum PaymentStatus {
   REFUNDED
 }
 
+// Тип события в ленте уведомлений мобилки. Гранулярность намеренно грубая:
+// конкретный статус заказа лежит в Notification.payload.status, а не в отдельном
+// значении енама. Иначе тут появилась бы вторая копия OrderStatus, и она бы
+// разъехалась с ALLOWED_TRANSITIONS при добавлении статуса — ровно то, что
+// AGENTS.md запрещает делать со списком статусов.
+enum NotificationType {
+  ORDER_STATUS_CHANGED // продавец/курьер перевёл заказ в новый статус
+}
+
 // Зачем открывали бота по диплинку. Оба флоу устроены одинаково (nonce → бот → поллинг),
 // поэтому живут в одной таблице BotLinkSession, а не в двух почти одинаковых.
 enum BotSessionPurpose {
@@ -90,6 +99,7 @@ model User {
   cartItems    CartItem[]
   orders       Order[]
   savedAddresses SavedAddress[]
+  notifications Notification[]
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -384,4 +394,44 @@ model SavedAddress {
 
   @@index([userId])
   @@map("saved_addresses")
+}
+
+// Лента уведомлений покупателя — источник правды для in-app нотификаций.
+//
+// Зачем таблица, а не только push: мобилка работает как Telegram Mini App, где
+// Web Push недоступен, а сообщение бота приходит в чат ПОД Mini App'ом и юзер его
+// не видит, пока не свернёт приложение. Клиент поллит /mobile/notifications и
+// узнаёт об изменениях, не выходя из приложения. Когда появится нативка, push
+// станет ещё одним каналом доставки поверх этой же таблицы, а не заменой ей.
+model Notification {
+  id String @id @default(cuid())
+
+  // Курсор ленты. Тот же приём, что Order.orderNumber: cuid как PK + отдельный
+  // монотонный autoincrement для порядка.
+  //
+  // ⚠️ Курсором НЕ может быть createdAt: now() в Postgres — это время начала
+  // транзакции, а не оператора, поэтому все строки одной транзакции получают
+  // одинаковую метку. Запрос `createdAt > cursor` вернул бы первую и навсегда
+  // потерял остальные (а `>=` бесконечно дублировал бы последнюю).
+  //
+  // Int, а не BigInt: 2.1 млрд строк недостижимы, а BigInt не сериализуется в JSON.
+  seq Int @unique @default(autoincrement())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type NotificationType
+
+  // Данные события, а не готовый текст. Тексты живут в коде клиента: положив сюда
+  // отрендеренную строку, мы бы зашили язык в БД навсегда — а мультиязычность уже
+  // заложена в Category (nameRu/nameUz/nameEn/nameKaa).
+  // Для ORDER_STATUS_CHANGED: { orderId, orderNumber, status }.
+  payload Json
+
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  // Покрывает и поллинг (userId + seq > cursor), и подсчёт непрочитанных.
+  @@index([userId, seq])
+  @@map("notifications")
 }

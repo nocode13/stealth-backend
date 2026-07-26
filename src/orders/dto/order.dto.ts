@@ -1,7 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { OrderStatus } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsArray,
   IsBoolean,
   IsEnum,
   IsLatitude,
@@ -17,6 +18,26 @@ import { CursorPaginationDto } from '../../common/dto/pagination.dto';
 
 // Тот же E.164, что валидирует мобилка (shared/lib/phone.ts) и PATCH /mobile/auth/me.
 const E164 = /^\+[1-9]\d{6,14}$/;
+
+/**
+ * Приводит `status` к массиву, в каком бы виде он ни пришёл в query.
+ *
+ * Поддерживаем обе формы намеренно: повторяющийся параметр
+ * (`?status=NEW&status=CONFIRMED`) — то, что даёт express из коробки, а
+ * список через запятую (`?status=NEW,CONFIRMED`) — то, что получается короче и
+ * не требует paramsSerializer на клиенте. Одиночное значение (`?status=NEW`)
+ * остаётся валидным, поэтому админка и старые клиенты не ломаются.
+ */
+const toStatusArray = ({ value }: { value: unknown }): unknown => {
+  if (value == null) return undefined;
+
+  const raw = Array.isArray(value) ? value : [value];
+
+  return raw
+    .flatMap((item) => (typeof item === 'string' ? item.split(',') : item))
+    .map((item) => (typeof item === 'string' ? item.trim() : item))
+    .filter((item) => item !== '');
+};
 
 export class CreateOrderDto {
   @ApiProperty({ example: 'Хикматжон' })
@@ -112,10 +133,18 @@ export class UpdateOrderCourierDto {
 }
 
 export class FindOrdersQueryDto extends CursorPaginationDto {
-  @ApiPropertyOptional({ enum: OrderStatus })
+  @ApiPropertyOptional({
+    enum: OrderStatus,
+    isArray: true,
+    description:
+      'Фильтр по статусам. Несколько значений: ?status=NEW&status=CONFIRMED ' +
+      'или ?status=NEW,CONFIRMED. Пусто — все статусы.',
+  })
   @IsOptional()
-  @IsEnum(OrderStatus)
-  status?: OrderStatus;
+  @Transform(toStatusArray)
+  @IsArray()
+  @IsEnum(OrderStatus, { each: true })
+  status?: OrderStatus[];
 
   @ApiPropertyOptional({ description: 'Номер заказа или телефон получателя' })
   @IsOptional()
