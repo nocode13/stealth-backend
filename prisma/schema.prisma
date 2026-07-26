@@ -199,7 +199,6 @@ model Category {
 model CatalogItem {
   id          String       @id @default(cuid())
   name        String
-  slug        String
   // Категория необязательна: позицию можно завести до того, как категория придумана
   // или одобрена, и снять её позже (PATCH с categoryId: null).
   categoryId  String?
@@ -214,7 +213,6 @@ model CatalogItem {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  @@unique([sellerId, slug])
   @@index([sellerId])
   @@index([status])
   @@index([categoryId])

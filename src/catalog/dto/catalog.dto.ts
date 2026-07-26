@@ -22,11 +22,6 @@ export class CreateCatalogItemDto {
   @MinLength(2)
   name: string;
 
-  @ApiProperty({ example: 'red-rose' })
-  @IsString()
-  @MinLength(2)
-  slug: string;
-
   @ApiPropertyOptional({ description: 'ID категории (необязательна)' })
   @IsOptional()
   @IsString()

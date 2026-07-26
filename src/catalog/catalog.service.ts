@@ -1,5 +1,4 @@
 import {
-  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -99,26 +98,16 @@ export class CatalogService {
       await this.categories.assertUsable(dto.categoryId, user);
     }
     const isSuperAdmin = user.role === Role.SUPER_ADMIN;
-    try {
-      return await this.prisma.catalogItem.create({
-        data: {
-          ...dto,
-          sellerId: isSuperAdmin ? null : user.sellerId,
-          status: isSuperAdmin ? ReviewStatus.APPROVED : ReviewStatus.PENDING,
-        },
-        include: withCategory,
-      });
-    } catch (e) {
-      if (
-        e instanceof Prisma.PrismaClientKnownRequestError &&
-        e.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          'Позиция с таким slug уже существует в этом каталоге',
-        );
-      }
-      throw e;
-    }
+    // Уникальных ограничений (кроме id) у позиции нет — позиции с одинаковым
+    // названием допустимы, ловить P2002 больше не от чего.
+    return this.prisma.catalogItem.create({
+      data: {
+        ...dto,
+        sellerId: isSuperAdmin ? null : user.sellerId,
+        status: isSuperAdmin ? ReviewStatus.APPROVED : ReviewStatus.PENDING,
+      },
+      include: withCategory,
+    });
   }
 
   async update(
