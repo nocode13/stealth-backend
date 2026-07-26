@@ -7,6 +7,7 @@ import { Category, Prisma, ReviewStatus, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
 import { CursorPage, toCursorPage } from '../common/pagination';
+import { CacheService } from '../cache/cache.service';
 import {
   CreateCategoryDto,
   FindCategoriesQueryDto,
@@ -29,7 +30,10 @@ function searchFilter(search?: string): Prisma.CategoryWhereInput | undefined {
 
 @Injectable()
 export class CategoriesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
+  ) {}
 
   // Видимость: SUPER_ADMIN видит всё (+ фильтры status/sellerId), SELLER — master
   // APPROVED + свои (любой статус); status/sellerId для SELLER игнорируются, чтобы
@@ -67,14 +71,16 @@ export class CategoriesService {
   async findStorefront(
     query: FindCategoriesQueryDto,
   ): Promise<CursorPage<Category>> {
-    const rows = await this.prisma.category.findMany({
-      where: { status: ReviewStatus.APPROVED, ...searchFilter(query.search) },
-      orderBy: [{ nameRu: 'asc' }, { id: 'asc' }],
-      cursor: query.cursor ? { id: query.cursor } : undefined,
-      skip: query.cursor ? 1 : 0,
-      take: query.limit + 1,
+    return this.cache.wrap('categories', query, async () => {
+      const rows = await this.prisma.category.findMany({
+        where: { status: ReviewStatus.APPROVED, ...searchFilter(query.search) },
+        orderBy: [{ nameRu: 'asc' }, { id: 'asc' }],
+        cursor: query.cursor ? { id: query.cursor } : undefined,
+        skip: query.cursor ? 1 : 0,
+        take: query.limit + 1,
+      });
+      return toCursorPage(rows, query.limit);
     });
-    return toCursorPage(rows, query.limit);
   }
 
   async findOne(id: string): Promise<Category> {
@@ -102,15 +108,17 @@ export class CategoriesService {
     return category;
   }
 
-  create(dto: CreateCategoryDto, user: AuthUser): Promise<Category> {
+  async create(dto: CreateCategoryDto, user: AuthUser): Promise<Category> {
     const isSuperAdmin = user.role === Role.SUPER_ADMIN;
-    return this.prisma.category.create({
+    const created = await this.prisma.category.create({
       data: {
         ...dto,
         sellerId: isSuperAdmin ? null : user.sellerId,
         status: isSuperAdmin ? ReviewStatus.APPROVED : ReviewStatus.PENDING,
       },
     });
+    await this.cache.bump();
+    return created;
   }
 
   async update(
@@ -125,11 +133,21 @@ export class CategoriesService {
     if (dto.status !== undefined && user.role !== Role.SUPER_ADMIN) {
       throw new ForbiddenException('Недостаточно прав');
     }
-    return this.prisma.category.update({ where: { id }, data: dto });
+    const updated = await this.prisma.category.update({
+      where: { id },
+      data: dto,
+    });
+    await this.cache.bump();
+    return updated;
   }
 
   async updateStatus(id: string, status: ReviewStatus): Promise<Category> {
     await this.findOne(id);
-    return this.prisma.category.update({ where: { id }, data: { status } });
+    const updated = await this.prisma.category.update({
+      where: { id },
+      data: { status },
+    });
+    await this.cache.bump();
+    return updated;
   }
 }

@@ -11,6 +11,7 @@ import type { AuthPrincipal } from '../common/decorators/current-user.decorator'
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddressesService } from '../addresses/addresses.service';
+import { CacheService } from '../cache/cache.service';
 import { OrderNotifier } from './order-notifier.service';
 import {
   CancelOrderDto,
@@ -41,6 +42,7 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly notifier: OrderNotifier,
     private readonly addresses: AddressesService,
+    private readonly cache: CacheService,
   ) {}
 
   // ─────────────────────────────── создание ───────────────────────────────
@@ -173,6 +175,11 @@ export class OrdersService {
       await tx.cartItem.deleteMany({ where: { userId } });
       return created;
     });
+
+    // Остаток списан — витрина (фильтр stock > 0 и сам остаток в карточке) устарела.
+    // Строго после коммита: bump внутри транзакции сбросил бы кеш до того, как
+    // новые остатки стали видны, и кеш перезаполнился бы старыми данными.
+    await this.cache.bump();
 
     // Телефон в профиле мог быть пустым — дозаполняем из заказа. Номер уникален и
     // может принадлежать другому аккаунту: в этом случае молча пропускаем, снапшот
@@ -353,12 +360,12 @@ export class OrdersService {
   // ───────────────────────────────── общее ─────────────────────────────────
 
   /** Применяет статус + пишет историю + возвращает остаток при отмене. */
-  private applyStatus(
+  private async applyStatus(
     order: OrderWithDetails,
     status: OrderStatus,
     meta: { comment?: string; changedByUserId?: string },
   ): Promise<OrderWithDetails> {
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       if (status === OrderStatus.CANCELLED) {
         await this.restock(tx, order);
       }
@@ -383,6 +390,12 @@ export class OrdersService {
         include: withDetails,
       });
     });
+
+    // Отмена вернула остаток в продажу — витрина устарела. Строго после коммита.
+    if (status === OrderStatus.CANCELLED) {
+      await this.cache.bump();
+    }
+    return updated;
   }
 
   // Отменённый заказ возвращает товар в продажу. listingId может быть null,

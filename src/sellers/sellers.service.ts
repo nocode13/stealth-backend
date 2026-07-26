@@ -9,6 +9,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { CursorPage, toCursorPage } from '../common/pagination';
+import { CacheService } from '../cache/cache.service';
 import {
   CreateSellerDto,
   FindSellersQueryDto,
@@ -22,6 +23,7 @@ export class SellersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly cache: CacheService,
   ) {}
 
   async findAll(query: FindSellersQueryDto): Promise<CursorPage<Seller>> {
@@ -48,11 +50,13 @@ export class SellersService {
 
   // Витрина мобилки: только ACTIVE продавцы (SUSPENDED/PENDING не показываем).
   async findOnePublic(id: string): Promise<Seller> {
-    const seller = await this.prisma.seller.findUnique({
-      where: { id, status: SellerStatus.ACTIVE },
+    return this.cache.wrap('seller', id, async () => {
+      const seller = await this.prisma.seller.findUnique({
+        where: { id, status: SellerStatus.ACTIVE },
+      });
+      if (!seller) throw new NotFoundException('Продавец не найден');
+      return seller;
     });
-    if (!seller) throw new NotFoundException('Продавец не найден');
-    return seller;
   }
 
   // Продавца заводит только SUPER_ADMIN. Владелец — новый User(role: SELLER),
@@ -62,7 +66,7 @@ export class SellersService {
   // видимость категорий/каталога) скоупит SELLER именно по User.sellerId.
   async create(dto: CreateSellerDto): Promise<Seller> {
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const created = await this.prisma.$transaction(async (tx) => {
         const passwordHash = await bcrypt.hash(dto.ownerPassword, 10);
         const owner = await tx.user.create({
           data: {
@@ -85,6 +89,8 @@ export class SellersService {
         });
         return seller;
       });
+      await this.cache.bump();
+      return created;
     } catch (e) {
       if (
         e instanceof Prisma.PrismaClientKnownRequestError &&
@@ -102,8 +108,13 @@ export class SellersService {
     }
   }
 
-  update(id: string, dto: UpdateSellerDto): Promise<Seller> {
-    return this.prisma.seller.update({ where: { id }, data: dto });
+  async update(id: string, dto: UpdateSellerDto): Promise<Seller> {
+    const updated = await this.prisma.seller.update({
+      where: { id },
+      data: dto,
+    });
+    await this.cache.bump();
+    return updated;
   }
 
   async updateBanner(id: string, bannerUrl: string): Promise<Seller> {
@@ -121,6 +132,11 @@ export class SellersService {
       }
     }
 
-    return this.prisma.seller.update({ where: { id }, data: { bannerUrl } });
+    const updated = await this.prisma.seller.update({
+      where: { id },
+      data: { bannerUrl },
+    });
+    await this.cache.bump();
+    return updated;
   }
 }

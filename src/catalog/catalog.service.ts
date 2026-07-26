@@ -10,6 +10,7 @@ import { StorageService } from '../storage/storage.service';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CategoriesService } from '../categories/categories.service';
+import { CacheService } from '../cache/cache.service';
 import {
   CreateCatalogItemDto,
   FindCatalogQueryDto,
@@ -28,25 +29,28 @@ export class CatalogService {
     private readonly prisma: PrismaService,
     private readonly categories: CategoriesService,
     private readonly storage: StorageService,
+    private readonly cache: CacheService,
   ) {}
 
   // Витрина (мобилка): только одобренные позиции, master и чужие продавцы вперемешку.
   async findAll(query: FindCatalogQueryDto): Promise<CursorPage<CatalogItem>> {
-    const rows = await this.prisma.catalogItem.findMany({
-      where: {
-        status: ReviewStatus.APPROVED,
-        name: query.search
-          ? { contains: query.search, mode: 'insensitive' }
-          : undefined,
-        categoryId: query.noCategory ? null : query.categoryId,
-      },
-      include: withCategory,
-      orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      cursor: query.cursor ? { id: query.cursor } : undefined,
-      skip: query.cursor ? 1 : 0,
-      take: query.limit + 1,
+    return this.cache.wrap('catalog', query, async () => {
+      const rows = await this.prisma.catalogItem.findMany({
+        where: {
+          status: ReviewStatus.APPROVED,
+          name: query.search
+            ? { contains: query.search, mode: 'insensitive' }
+            : undefined,
+          categoryId: query.noCategory ? null : query.categoryId,
+        },
+        include: withCategory,
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        cursor: query.cursor ? { id: query.cursor } : undefined,
+        skip: query.cursor ? 1 : 0,
+        take: query.limit + 1,
+      });
+      return toCursorPage(rows, query.limit);
     });
-    return toCursorPage(rows, query.limit);
   }
 
   // Админка: SUPER_ADMIN видит всё (+ фильтры status/sellerId), SELLER — master
@@ -100,7 +104,7 @@ export class CatalogService {
     const isSuperAdmin = user.role === Role.SUPER_ADMIN;
     // Уникальных ограничений (кроме id) у позиции нет — позиции с одинаковым
     // названием допустимы, ловить P2002 больше не от чего.
-    return this.prisma.catalogItem.create({
+    const created = await this.prisma.catalogItem.create({
       data: {
         ...dto,
         sellerId: isSuperAdmin ? null : user.sellerId,
@@ -108,6 +112,8 @@ export class CatalogService {
       },
       include: withCategory,
     });
+    await this.cache.bump();
+    return created;
   }
 
   async update(
@@ -125,11 +131,13 @@ export class CatalogService {
     if (dto.categoryId) {
       await this.categories.assertUsable(dto.categoryId, user);
     }
-    return this.prisma.catalogItem.update({
+    const updated = await this.prisma.catalogItem.update({
       where: { id },
       data: dto,
       include: withCategory,
     });
+    await this.cache.bump();
+    return updated;
   }
 
   async remove(id: string, user: AuthUser): Promise<void> {
@@ -138,6 +146,7 @@ export class CatalogService {
       throw new ForbiddenException('Чужая позиция справочника');
     }
     await this.prisma.catalogItem.delete({ where: { id } });
+    await this.cache.bump();
   }
 
   async updateImage(
@@ -159,11 +168,13 @@ export class CatalogService {
       }
     }
 
-    return this.prisma.catalogItem.update({
+    const updated = await this.prisma.catalogItem.update({
       where: { id },
       data: { imageUrl },
       include: withCategory,
     });
+    await this.cache.bump();
+    return updated;
   }
 
   // Используется ListingsService: продавец может продавать только по одобренной

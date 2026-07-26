@@ -8,6 +8,7 @@ import { Listing, ListingStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CatalogService } from '../catalog/catalog.service';
+import { CacheService } from '../cache/cache.service';
 import {
   CreateListingDto,
   FindListingsQueryDto,
@@ -32,6 +33,7 @@ export class ListingsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly catalog: CatalogService,
+    private readonly cache: CacheService,
   ) {}
 
   // Витрина мобилки: только активные листинги. status из query игнорируется — тут
@@ -39,36 +41,41 @@ export class ListingsService {
   async findStorefront(
     query: FindListingsQueryDto,
   ): Promise<CursorPage<Listing>> {
-    const rows = await this.prisma.listing.findMany({
-      where: {
-        status: ListingStatus.ACTIVE,
-        stock: { gt: 0 },
-        sellerId: query.sellerId,
-        price: buildPriceFilter(query.minPrice, query.maxPrice),
-        catalogItem: {
-          categoryId: query.categoryId,
-          name: query.search
-            ? { contains: query.search, mode: 'insensitive' }
-            : undefined,
+    return this.cache.wrap('listings', query, async () => {
+      const rows = await this.prisma.listing.findMany({
+        where: {
+          status: ListingStatus.ACTIVE,
+          stock: { gt: 0 },
+          sellerId: query.sellerId,
+          price: buildPriceFilter(query.minPrice, query.maxPrice),
+          catalogItem: {
+            categoryId: query.categoryId,
+            name: query.search
+              ? { contains: query.search, mode: 'insensitive' }
+              : undefined,
+          },
         },
-      },
-      include: withCatalog,
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      cursor: query.cursor ? { id: query.cursor } : undefined,
-      skip: query.cursor ? 1 : 0,
-      take: query.limit + 1,
+        include: withCatalog,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        cursor: query.cursor ? { id: query.cursor } : undefined,
+        skip: query.cursor ? 1 : 0,
+        take: query.limit + 1,
+      });
+      return toCursorPage(rows, query.limit);
     });
-    return toCursorPage(rows, query.limit);
   }
 
   // Одно активное предложение для витрины мобилки (карточка товара).
   async findOnePublic(id: string): Promise<Listing> {
-    const listing = await this.prisma.listing.findFirst({
-      where: { id, status: ListingStatus.ACTIVE, stock: { gt: 0 } },
-      include: withCatalog,
+    return this.cache.wrap('listing', id, async () => {
+      const listing = await this.prisma.listing.findFirst({
+        where: { id, status: ListingStatus.ACTIVE, stock: { gt: 0 } },
+        include: withCatalog,
+      });
+      // Промах в БД не кешируется: исключение из колбэка wrap пробрасывает как есть.
+      if (!listing) throw new NotFoundException('Листинг не найден');
+      return listing;
     });
-    if (!listing) throw new NotFoundException('Листинг не найден');
-    return listing;
   }
 
   // Листинги конкретного продавца (админка). sellerId === null — SUPER_ADMIN
@@ -121,10 +128,12 @@ export class ListingsService {
     const { sellerId: _, ...data } = dto;
     await this.catalog.assertUsable(data.catalogItemId, sellerId);
     try {
-      return await this.prisma.listing.create({
+      const listing = await this.prisma.listing.create({
         data: { ...data, sellerId },
         include: withCatalog,
       });
+      await this.cache.bump();
+      return listing;
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -144,15 +153,18 @@ export class ListingsService {
     dto: UpdateListingDto,
   ): Promise<Listing> {
     await this.findOneForSeller(id, sellerId);
-    return this.prisma.listing.update({
+    const listing = await this.prisma.listing.update({
       where: { id },
       data: dto,
       include: withCatalog,
     });
+    await this.cache.bump();
+    return listing;
   }
 
   async remove(id: string, sellerId: string | null): Promise<void> {
     await this.findOneForSeller(id, sellerId);
     await this.prisma.listing.delete({ where: { id } });
+    await this.cache.bump();
   }
 }

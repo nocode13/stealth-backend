@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import configuration, { envValidationSchema } from './config/configuration';
 import { PrismaModule } from './prisma/prisma.module';
+import { CacheModule } from './cache/cache.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { SellersModule } from './sellers/sellers.module';
@@ -19,6 +20,7 @@ import { MobileModule } from './mobile/mobile.module';
       validationSchema: envValidationSchema,
     }),
     PrismaModule,
+    CacheModule,
     // Доменные модули (бизнес-логика + доступ к БД).
     UsersModule,
     AuthModule,

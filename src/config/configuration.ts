@@ -37,6 +37,12 @@ export const envValidationSchema = Joi.object({
   S3_ACCESS_KEY: Joi.string().required(),
   S3_SECRET_KEY: Joi.string().required(),
   S3_PUBLIC_URL: Joi.string().required(),
+
+  // Redis — кеш публичной витрины мобилки. Переменная optional намеренно: пустая
+  // или отсутствующая = кеш выключен, приложение поднимается и ходит прямо в БД
+  // (тот же приём, что с TELEGRAM_BOT_TOKEN).
+  REDIS_URL: Joi.string().allow('').optional(),
+  CACHE_TTL_SECONDS: Joi.number().default(60),
 });
 
 // Типизированный доступ к конфигу через ConfigService.
@@ -80,5 +86,9 @@ export default () => ({
     // Хвостовой слэш срезаем: upload() и keyFromUrl() склеивают/режут ссылку
     // по `${publicUrl}/${key}`, и на двойном слэше они разъедутся.
     publicUrl: process.env.S3_PUBLIC_URL?.replace(/\/+$/, ''),
+  },
+  cache: {
+    url: process.env.REDIS_URL,
+    ttlSeconds: parseInt(process.env.CACHE_TTL_SECONDS ?? '60', 10),
   },
 });
