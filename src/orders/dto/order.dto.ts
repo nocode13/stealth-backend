@@ -31,7 +31,7 @@ const E164 = /^\+[1-9]\d{6,14}$/;
 const toStatusArray = ({ value }: { value: unknown }): unknown => {
   if (value == null) return undefined;
 
-  const raw = Array.isArray(value) ? value : [value];
+  const raw: unknown[] = Array.isArray(value) ? value : [value];
 
   return raw
     .flatMap((item) => (typeof item === 'string' ? item.split(',') : item))

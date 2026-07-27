@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { CategoriesModule } from '../categories/categories.module';
 import { CatalogModule } from '../catalog/catalog.module';
 import { ListingsModule } from '../listings/listings.module';
+import { MetricsModule } from '../metrics/metrics.module';
 import { OrdersModule } from '../orders/orders.module';
 import { SellersModule } from '../sellers/sellers.module';
 import { StorageModule } from '../storage/storage.module';
@@ -11,6 +12,7 @@ import { AdminAuthController } from './admin-auth.controller';
 import { AdminCategoriesController } from './admin-categories.controller';
 import { AdminCatalogController } from './admin-catalog.controller';
 import { AdminListingsController } from './admin-listings.controller';
+import { AdminMetricsController } from './admin-metrics.controller';
 import { AdminOrdersController } from './admin-orders.controller';
 import { AdminSellersController } from './admin-sellers.controller';
 
@@ -22,6 +24,7 @@ import { AdminSellersController } from './admin-sellers.controller';
     CategoriesModule,
     CatalogModule,
     ListingsModule,
+    MetricsModule,
     OrdersModule,
     SellersModule,
     StorageModule,
@@ -32,6 +35,7 @@ import { AdminSellersController } from './admin-sellers.controller';
     AdminCategoriesController,
     AdminCatalogController,
     AdminListingsController,
+    AdminMetricsController,
     AdminOrdersController,
     AdminSellersController,
   ],
