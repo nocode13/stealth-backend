@@ -69,10 +69,10 @@ enum NotificationType {
   ORDER_STATUS_CHANGED // продавец/курьер перевёл заказ в новый статус
 }
 
-// Зачем открывали бота по диплинку. Оба флоу устроены одинаково (nonce → бот → поллинг),
-// поэтому живут в одной таблице BotLinkSession, а не в двух почти одинаковых.
+// Зачем открывали бота по диплинку. Один вариант сегодня (продавец привязывает Telegram),
+// но модель осталась в форме enum+таблица на случай следующего bot-link флоу — раньше тут
+// был ещё DELIVERY_LOCATION (адрес доставки покупателя), выпилен в пользу пикера карты.
 enum BotSessionPurpose {
-  DELIVERY_LOCATION // покупатель шлёт геолокацию для адреса доставки
   SELLER_LINK // продавец привязывает свой Telegram к аккаунту админки
 }
 
@@ -134,10 +134,6 @@ model BotLinkSession {
   nonce   String            @unique
   purpose BotSessionPurpose
   userId  String
-
-  // Заполняются ботом, когда покупатель прислал геопозицию (purpose DELIVERY_LOCATION).
-  latitude  Float?
-  longitude Float?
 
   consumedAt DateTime?
   expiresAt  DateTime

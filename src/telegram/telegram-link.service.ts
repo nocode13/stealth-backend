@@ -20,20 +20,15 @@ export interface BotLinkCreated {
   expiresIn: number;
 }
 
-export type LocationStatus =
-  | { status: 'pending' }
-  | { status: 'expired' }
-  | { status: 'received'; latitude: number; longitude: number };
-
 // Префикс в /start payload — по нему бот понимает, зачем его открыли.
 const PREFIX: Record<BotSessionPurpose, string> = {
-  [BotSessionPurpose.DELIVERY_LOCATION]: 'loc',
   [BotSessionPurpose.SELLER_LINK]: 'sel',
 };
 
 /**
- * Сессии «сходить в бота и вернуться» для уже авторизованного пользователя:
- * адрес доставки (покупатель) и привязка Telegram (продавец).
+ * Сессия «сходить в бота и вернуться» для уже авторизованного пользователя —
+ * привязка Telegram продавца. (Раньше сюда же входил адрес доставки покупателя —
+ * тот флоу выпилен в пользу пикера карты, см. stealth-mobile.)
  *
  * Механика та же, что у входа (TelegramAuthService): nonce в диплинке + поллинг.
  * Отличие в том, что userId известен заранее, а не создаётся ботом, — поэтому
@@ -73,85 +68,6 @@ export class TelegramLinkService {
       nonce,
       botUrl: `https://t.me/${botUsername}?start=${PREFIX[purpose]}_${nonce}`,
       expiresIn: this.ttlSeconds,
-    };
-  }
-
-  // ─────────────────────────── адрес доставки ───────────────────────────
-
-  /** Бот получил /start loc_<nonce>: помечаем, кто именно сейчас шлёт локацию. */
-  async attachLocationRequest(
-    nonce: string,
-    telegramId: string,
-  ): Promise<boolean> {
-    const session = await this.findLive(
-      nonce,
-      BotSessionPurpose.DELIVERY_LOCATION,
-    );
-    if (!session) return false;
-    // Сверяем, что бота открыл владелец сессии, а не тот, кому переслали ссылку.
-    const user = await this.prisma.user.findUnique({
-      where: { id: session.userId },
-      select: { telegramId: true },
-    });
-    return user?.telegramId === telegramId;
-  }
-
-  /** Пришло message:location — кладём координаты в свежую сессию этого юзера. */
-  async saveLocation(
-    telegramId: string,
-    latitude: number,
-    longitude: number,
-  ): Promise<boolean> {
-    const user = await this.prisma.user.findUnique({ where: { telegramId } });
-    if (!user) return false;
-
-    const session = await this.prisma.botLinkSession.findFirst({
-      where: {
-        userId: user.id,
-        purpose: BotSessionPurpose.DELIVERY_LOCATION,
-        consumedAt: null,
-        expiresAt: { gt: new Date() },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (!session) return false;
-
-    await this.prisma.botLinkSession.update({
-      where: { id: session.id },
-      data: { latitude, longitude },
-    });
-    return true;
-  }
-
-  /** Мобилка поллит, пока не придут координаты. Отдаём их ровно один раз. */
-  async pollLocation(nonce: string, userId: string): Promise<LocationStatus> {
-    const session = await this.prisma.botLinkSession.findUnique({
-      where: { nonce },
-    });
-    if (
-      !session ||
-      session.userId !== userId ||
-      session.consumedAt ||
-      session.expiresAt < new Date()
-    ) {
-      return { status: 'expired' };
-    }
-    if (session.latitude == null || session.longitude == null) {
-      return { status: 'pending' };
-    }
-
-    // Условный claim, как в TelegramAuthService.poll: гонка двух поллеров
-    // не должна отдать координаты дважды.
-    const claimed = await this.prisma.botLinkSession.updateMany({
-      where: { id: session.id, consumedAt: null },
-      data: { consumedAt: new Date() },
-    });
-    if (claimed.count === 0) return { status: 'expired' };
-
-    return {
-      status: 'received',
-      latitude: session.latitude,
-      longitude: session.longitude,
     };
   }
 

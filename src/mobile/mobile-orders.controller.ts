@@ -8,10 +8,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { BotSessionPurpose } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { TelegramLinkService } from '../telegram/telegram-link.service';
 import {
   CancelOrderDto,
   CreateOrderDto,
@@ -25,40 +23,7 @@ import { OrdersService } from '../orders/orders.service';
 @Controller('mobile/orders')
 @UseGuards(JwtAuthGuard)
 export class MobileOrdersController {
-  constructor(
-    private readonly orders: OrdersService,
-    private readonly links: TelegramLinkService,
-  ) {}
-
-  // ── адрес доставки через Telegram ──────────────────────────────────────
-  // Тот же приём, что при входе: получаем nonce, открываем бота, поллим ответ.
-  // Диплинк обратно в приложение не нужен — возврат ловит именно поллинг,
-  // поэтому флоу переживает сворачивание приложения на всех платформах.
-
-  @Post('delivery/location/session')
-  @ApiOperation({
-    summary: 'Запросить адрес через Telegram-бота',
-    description: 'Возвращает ссылку на бота; бот попросит геопозицию кнопкой.',
-  })
-  createLocationSession(@CurrentUser('id') userId: string) {
-    return this.links.createSession(
-      userId,
-      BotSessionPurpose.DELIVERY_LOCATION,
-    );
-  }
-
-  @Get('delivery/location/session/:nonce')
-  @ApiOperation({
-    summary: 'Поллинг адреса',
-    description:
-      'pending → ждём | received → координаты | expired → начать заново',
-  })
-  pollLocationSession(
-    @CurrentUser('id') userId: string,
-    @Param('nonce') nonce: string,
-  ) {
-    return this.links.pollLocation(nonce, userId);
-  }
+  constructor(private readonly orders: OrdersService) {}
 
   @Post()
   @ApiOperation({

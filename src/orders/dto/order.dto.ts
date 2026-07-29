@@ -4,6 +4,7 @@ import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
+  IsDefined,
   IsEnum,
   IsLatitude,
   IsLongitude,
@@ -73,16 +74,19 @@ export class CreateOrderDto {
   @MaxLength(500)
   deliveryComment?: string;
 
-  // Координаты приходят из Telegram-локации и необязательны: текстового адреса
-  // достаточно, чтобы оформить заказ.
-  @ApiPropertyOptional({ example: 41.311081 })
-  @IsOptional()
+  // Координаты приходят из пикера карты (Yandex MapKit/ymaps3) и обязательны для
+  // ветки «новый адрес» — так же, как deliveryAddress. Раньше были опциональным
+  // бонусом поверх Telegram-локации; теперь это основной способ задать точку.
+  @ApiProperty({ example: 41.311081 })
+  @ValidateIf((o: CreateOrderDto) => !o.savedAddressId)
+  @IsDefined({ message: 'Укажите точку на карте' })
   @Type(() => Number)
   @IsLatitude()
   deliveryLat?: number;
 
-  @ApiPropertyOptional({ example: 69.240562 })
-  @IsOptional()
+  @ApiProperty({ example: 69.240562 })
+  @ValidateIf((o: CreateOrderDto) => !o.savedAddressId)
+  @IsDefined({ message: 'Укажите точку на карте' })
   @Type(() => Number)
   @IsLongitude()
   deliveryLng?: number;
