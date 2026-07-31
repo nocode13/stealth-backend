@@ -9,7 +9,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 
 const withListing = {
-  listing: { include: { catalogItem: { include: { category: true } } } },
+  listing: {
+    include: {
+      catalogItem: {
+        include: { category: true, images: { orderBy: { sortOrder: 'asc' } } },
+      },
+    },
+  },
 } satisfies Prisma.CartItemInclude;
 
 type CartItemWithListing = Prisma.CartItemGetPayload<{

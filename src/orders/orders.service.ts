@@ -58,7 +58,15 @@ export class OrdersService {
   ): Promise<OrderWithDetails[]> {
     const cartItems = await this.prisma.cartItem.findMany({
       where: { userId },
-      include: { listing: { include: { catalogItem: true } } },
+      include: {
+        listing: {
+          include: {
+            catalogItem: {
+              include: { images: { orderBy: { sortOrder: 'asc' }, take: 1 } },
+            },
+          },
+        },
+      },
       orderBy: { createdAt: 'asc' },
     });
     if (cartItems.length === 0) {
@@ -143,7 +151,8 @@ export class OrdersService {
               create: items.map((item) => ({
                 listingId: item.listingId,
                 catalogItemName: item.listing.catalogItem.name,
-                catalogItemImageUrl: item.listing.catalogItem.imageUrl,
+                catalogItemImageUrl:
+                  item.listing.catalogItem.images[0]?.url ?? null,
                 unit: item.listing.catalogItem.unit,
                 price: item.listing.price,
                 quantity: item.quantity,

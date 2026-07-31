@@ -34,6 +34,7 @@ import { imageUploadBody, imageUploadOptions } from './upload.options';
 import {
   CreateCatalogItemDto,
   FindCatalogQueryDto,
+  ReorderCatalogImageDto,
   UpdateCatalogItemDto,
 } from '../catalog/dto/catalog.dto';
 
@@ -88,12 +89,12 @@ export class AdminCatalogController {
     return this.catalog.remove(id, user);
   }
 
-  @Post(':id/image')
+  @Post(':id/images')
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Загрузить фото позиции справочника' })
+  @ApiOperation({ summary: 'Добавить фото в галерею позиции справочника' })
   @ApiBody(imageUploadBody)
   @UseInterceptors(FileInterceptor('file', imageUploadOptions))
-  async uploadImage(
+  async addImage(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() user: AuthUser,
@@ -104,6 +105,27 @@ export class AdminCatalogController {
     const { buffer, contentType, ext } = await this.image.toWebp(file.buffer);
     const key = `catalog/${id}-${Date.now()}.${ext}`;
     const imageUrl = await this.storage.upload(key, buffer, contentType);
-    return this.catalog.updateImage(id, imageUrl, user);
+    return this.catalog.addImage(id, imageUrl, user);
+  }
+
+  @Delete(':id/images/:imageId')
+  @ApiOperation({ summary: 'Удалить фото из галереи позиции справочника' })
+  removeImage(
+    @Param('id') id: string,
+    @Param('imageId') imageId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.catalog.removeImage(id, imageId, user);
+  }
+
+  @Patch(':id/images/:imageId/reorder')
+  @ApiOperation({ summary: 'Сдвинуть фото в галерее вверх/вниз' })
+  reorderImage(
+    @Param('id') id: string,
+    @Param('imageId') imageId: string,
+    @Body() dto: ReorderCatalogImageDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.catalog.reorderImage(id, imageId, dto.direction, user);
   }
 }

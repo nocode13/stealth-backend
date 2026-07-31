@@ -9,6 +9,7 @@ import { Transform } from 'class-transformer';
 import {
   IsBoolean,
   IsEnum,
+  IsIn,
   IsOptional,
   IsString,
   MinLength,
@@ -31,11 +32,6 @@ export class CreateCatalogItemDto {
   @IsOptional()
   @IsString()
   description?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  imageUrl?: string;
 
   @ApiPropertyOptional({ example: 'шт', default: 'шт' })
   @IsOptional()
@@ -95,4 +91,10 @@ export class FindCatalogQueryDto extends CursorPaginationDto {
   @IsOptional()
   @IsString()
   sellerId?: string;
+}
+
+export class ReorderCatalogImageDto {
+  @ApiProperty({ enum: ['up', 'down'] })
+  @IsIn(['up', 'down'])
+  direction: 'up' | 'down';
 }

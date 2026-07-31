@@ -4,7 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { CatalogItem, Prisma, ReviewStatus, Role } from '@prisma/client';
+import { Prisma, ReviewStatus, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
@@ -17,9 +17,16 @@ import {
   UpdateCatalogItemDto,
 } from './dto/catalog.dto';
 
+const MAX_IMAGES_PER_ITEM = 10;
+
 const withCategory = {
   category: true,
+  images: { orderBy: { sortOrder: 'asc' } },
 } satisfies Prisma.CatalogItemInclude;
+
+export type CatalogItem = Prisma.CatalogItemGetPayload<{
+  include: typeof withCategory;
+}>;
 
 @Injectable()
 export class CatalogService {
@@ -149,32 +156,84 @@ export class CatalogService {
     await this.cache.bump();
   }
 
-  async updateImage(
-    id: string,
-    imageUrl: string,
-    user: AuthUser,
-  ): Promise<CatalogItem> {
+  private async assertOwned(id: string, user: AuthUser) {
     const item = await this.findOne(id);
     if (user.role !== Role.SUPER_ADMIN && item.sellerId !== user.sellerId) {
       throw new ForbiddenException('Чужая позиция справочника');
     }
+    return item;
+  }
 
-    if (item.imageUrl) {
-      const oldKey = this.storage.keyFromUrl(item.imageUrl);
-      if (oldKey) {
-        this.storage.delete(oldKey).catch((e: unknown) => {
-          this.logger.warn(`Не удалось удалить старое фото ${oldKey}`, e);
-        });
-      }
+  async addImage(
+    id: string,
+    url: string,
+    user: AuthUser,
+  ): Promise<CatalogItem> {
+    const item = await this.assertOwned(id, user);
+    if (item.images.length >= MAX_IMAGES_PER_ITEM) {
+      throw new ForbiddenException(
+        `Не больше ${MAX_IMAGES_PER_ITEM} фото на позицию`,
+      );
     }
-
-    const updated = await this.prisma.catalogItem.update({
-      where: { id },
-      data: { imageUrl },
-      include: withCategory,
+    const nextSortOrder = item.images.length
+      ? Math.max(...item.images.map((i) => i.sortOrder)) + 1
+      : 0;
+    await this.prisma.catalogItemImage.create({
+      data: { catalogItemId: id, url, sortOrder: nextSortOrder },
     });
     await this.cache.bump();
-    return updated;
+    return this.findOne(id);
+  }
+
+  async removeImage(
+    id: string,
+    imageId: string,
+    user: AuthUser,
+  ): Promise<CatalogItem> {
+    const item = await this.assertOwned(id, user);
+    const image = item.images.find((i) => i.id === imageId);
+    if (!image) throw new NotFoundException('Фото не найдено');
+
+    const oldKey = this.storage.keyFromUrl(image.url);
+    if (oldKey) {
+      this.storage.delete(oldKey).catch((e: unknown) => {
+        this.logger.warn(`Не удалось удалить фото ${oldKey}`, e);
+      });
+    }
+
+    await this.prisma.catalogItemImage.delete({ where: { id: imageId } });
+    await this.cache.bump();
+    return this.findOne(id);
+  }
+
+  async reorderImage(
+    id: string,
+    imageId: string,
+    direction: 'up' | 'down',
+    user: AuthUser,
+  ): Promise<CatalogItem> {
+    const item = await this.assertOwned(id, user);
+    const images = item.images; // уже отсортированы по sortOrder
+    const index = images.findIndex((i) => i.id === imageId);
+    if (index === -1) throw new NotFoundException('Фото не найдено');
+
+    const swapWith = direction === 'up' ? index - 1 : index + 1;
+    if (swapWith < 0 || swapWith >= images.length) return item;
+
+    const a = images[index];
+    const b = images[swapWith];
+    await this.prisma.$transaction([
+      this.prisma.catalogItemImage.update({
+        where: { id: a.id },
+        data: { sortOrder: b.sortOrder },
+      }),
+      this.prisma.catalogItemImage.update({
+        where: { id: b.id },
+        data: { sortOrder: a.sortOrder },
+      }),
+    ]);
+    await this.cache.bump();
+    return this.findOne(id);
   }
 
   // Используется ListingsService: продавец может продавать только по одобренной

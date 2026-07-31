@@ -16,7 +16,9 @@ import {
 } from './dto/listing.dto';
 
 const withCatalog = {
-  catalogItem: { include: { category: true } },
+  catalogItem: {
+    include: { category: true, images: { orderBy: { sortOrder: 'asc' } } },
+  },
   seller: { select: { id: true, name: true } },
 } satisfies Prisma.ListingInclude;
 

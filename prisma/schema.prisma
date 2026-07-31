@@ -211,7 +211,7 @@ model CatalogItem {
   categoryId  String?
   category    Category?    @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   description String?
-  imageUrl    String?
+  images      CatalogItemImage[]
   unit        String       @default("шт") // единица измерения: шт, букет, упаковка...
   sellerId    String?
   seller      Seller?      @relation(fields: [sellerId], references: [id], onDelete: Cascade)
@@ -225,6 +225,20 @@ model CatalogItem {
   @@index([categoryId])
   @@index([createdAt])
   @@map("catalog")
+}
+
+// Фото позиции каталога, много на одну позицию. sortOrder — явный порядок для
+// галереи (first = обложка/превью), меняется кнопками вверх/вниз в админке.
+model CatalogItemImage {
+  id            String      @id @default(cuid())
+  catalogItemId String
+  catalogItem   CatalogItem @relation(fields: [catalogItemId], references: [id], onDelete: Cascade)
+  url           String
+  sortOrder     Int
+  createdAt     DateTime    @default(now())
+
+  @@index([catalogItemId])
+  @@map("catalog_item_images")
 }
 
 // Предложение продавца поверх позиции справочника + инвентарь (остаток).
