@@ -1,403 +1,360 @@
 # Stealth Backend — платформа продажи цветов
 
-Backend (NestJS) для платформы продажи цветов и инвентаря. Часть системы из трёх
-приложений: **мобилка** (покупатели), **админка** (продавец/платформа) и этот
-**backend** (отдельный репозиторий). MVP: пока один продавец, но архитектура
-рассчитана на мультипродавца (marketplace).
+Backend (NestJS) для платформы продажи цветов и инвентаря. Система из трёх приложений:
+**мобилка** (покупатели, живёт как Telegram Mini App), **админка** (продавец/платформа) и этот
+**backend** (отдельный репозиторий). MVP — один продавец, модель данных мультипродавцовая.
 
 ## Стек
 
-- **NestJS 11** + TypeScript (`module: nodenext`), пакетный менеджер **pnpm**.
-- **PostgreSQL 16** в Docker (`docker-compose.yml`).
-- **Prisma 6** — ORM (`prisma/schema.prisma`, `prisma/migrations/`, `prisma/seed.ts`).
-  - ⚠️ Намеренно зафиксирована v6: Prisma 7 требует driver-адаптеры и
-    `prisma.config.ts`. Не апгрейдить до v7 без миграции конфига.
-  - Схема ведётся через **миграции** (`prisma migrate`). Файлы миграций коммитятся в git.
-  - ⚠️ `prisma migrate dev` детектит drift из-за таблицы `session` (создаётся
-    `connect-pg-simple` вне Prisma, см. «Аутентификация»). Если он просит `migrate reset`,
-    не соглашайтесь на нём вслепую (потеря данных) — либо пишите миграцию руками
-    и накатывайте через `prisma migrate deploy`, либо временно убирайте `session`
-    из БД перед генерацией.
-- **Passport** — аутентификация: JWT+refresh (мобилка), session (админка).
-- **grammy** — Telegram-бот: единственный способ входа в мобилку (`src/telegram/`).
-- **MinIO** (S3-совместимое хранилище, `docker-compose.yml`) — фото каталога,
-  через `@aws-sdk/client-s3` (`src/storage/`). На проде — тот же код, другой S3-провайдер.
-- **@nestjs/swagger** — две отдельные спеки.
+NestJS 11 + TypeScript (`module: nodenext`), Node ≥22, pnpm · PostgreSQL 16 + **Prisma 6**
+(⚠️ v6 зафиксирована: Prisma 7 требует driver-адаптеры и `prisma.config.ts`) · Redis
+(`ioredis`, опционален) · Passport (JWT+refresh для мобилки, session для админки) · grammy
+(бот — единственный вход в мобилку) · S3 (`@aws-sdk/client-s3`) + `sharp` — MinIO локально,
+Cloudflare R2 на проде · `@nestjs/swagger` (две спеки) · `@nestjs/config` + Joi
+(`src/config/configuration.ts`).
 
-## Как запустить
+## Запуск
 
 ```bash
-pnpm install
-cp .env.example .env          # секреты уже с дефолтами для локалки
-pnpm db:up                    # поднять Postgres + MinIO в docker
-pnpm db:migrate               # применить миграции (prisma migrate dev)
-pnpm db:seed                  # засидить супер-админа (больше сид ничего не создаёт)
-pnpm start:dev                # запуск с watch
+pnpm install && cp .env.example .env   # дефолты для локалки проставлены
+pnpm db:up                             # ⚠️ только postgres + minio; redis поднимать вручную
+pnpm db:migrate && pnpm db:seed
+pnpm start:dev
 ```
 
-На деплое схему накатывает `pnpm db:deploy` (`prisma migrate deploy`) — применяет только
-новые миграции, ничего не удаляя.
-
-- Swagger: `http://localhost:3000/docs/admin` и `/docs/mobile`.
-- Health: `GET /health`.
-- Adminer (UI для БД): `http://localhost:8080` (сервер `postgres`, БД/юзер/пароль `stealth`).
-- MinIO: S3 API `http://localhost:9000`, консоль `http://localhost:9001`
-  (`stealth`/`stealth123`), бакет `catalog` создаётся автоматически (`minio-init`
-  в `docker-compose.yml`, публичное чтение).
-
-Сид создаёт **только супер-админа** — `admin@stealth.local` / `+998900000001`
-(справочник, категории, продавцы). Пароль — из `SEED_ADMIN_PASSWORD`, локальный
-дефолт `password123`. Продавцы, категории, каталог и листинги заводятся через
-админку: сид намеренно не наполняет БД демо-данными, чтобы его можно было
-безопасно прогонять на проде.
-
-## Скрипты
+Swagger `/docs/admin` и `/docs/mobile`, health `GET /health`, Adminer `:8080` (всё `stealth`),
+MinIO-консоль `:9001` (`stealth`/`stealth123`, бакет `catalog` создаёт `minio-init`, чтение
+публичное). Полный список переменных — в `.env.example` (с комментариями), обязательность и
+дефолты — в Joi-схеме. Сид создаёт **только супер-админа** `admin@stealth.local` / `+998900000001`
+(пароль из `SEED_ADMIN_PASSWORD`, дефолт `password123`) — демо-данных нет намеренно, чтобы
+сид можно было гонять на проде. Всё остальное заводится через админку.
 
 | Скрипт | Действие |
 |--------|----------|
-| `pnpm start:dev` | запуск с watch |
-| `pnpm build` | сборка (`nest build`, prisma исключена из компиляции) |
-| `pnpm db:up` / `db:down` | поднять/остановить Postgres |
-| `pnpm db:migrate` | создать+применить миграцию в dev (`prisma migrate dev`) |
-| `pnpm db:deploy` | применить миграции на проде (`prisma migrate deploy`) |
-| `pnpm db:seed` | наполнить БД |
-| `pnpm db:studio` | Prisma Studio |
-| `pnpm prisma:generate` | перегенерировать Prisma Client (после правки схемы) |
+| `start:dev` / `build` / `start:prod` | watch / `prisma generate && nest build` / прод |
+| `start:railway` | `prisma migrate deploy && node dist/main` |
+| `db:up` / `db:down` / `db:studio` | docker-инфраструктура / Prisma Studio |
+| `db:migrate` / `db:deploy` / `db:seed` | миграция в dev / на проде / сид |
+| `prisma:generate` | перегенерировать клиент после правки схемы |
+| `lint` / `format` | eslint --fix (`eslint.config.mjs`) / prettier |
+| `test`, `test:watch`, `test:cov`, `test:e2e` | jest — см. «Проверка изменений»: тестов нет |
+| `tunnel` / `tunnel:minio` | cloudflared на 3000 / 9000 (webhook бота и фото в dev) |
 
-## Архитектура модулей
+⚠️ `prisma migrate dev` детектит drift из-за таблицы `session` (её создаёт `connect-pg-simple`
+вне Prisma). На предложение `migrate reset` не соглашаться вслепую — потеря данных: либо
+писать миграцию руками и накатывать `prisma migrate deploy`, либо временно удалить `session`
+из БД. Миграции коммитятся в git.
 
-Разделение на **доменные модули** (бизнес-логика + доступ к БД) и
-**API-поверхности** (тонкие контроллеры со своими guard'ами и Swagger-тегами).
-Логика в поверхностях не дублируется — только вызовы доменных сервисов.
+## Архитектура
+
+**Доменные модули** (бизнес-логика + Prisma) отдельно от **API-поверхностей** (тонкие
+контроллеры со своими guard'ами и Swagger-тегами). Логика в поверхностях не дублируется.
+Новый домен = `*.service.ts` + `*.module.ts`, контроллеры — в `admin/`/`mobile/`.
 
 ```
 src/
-  config/          # @nestjs/config + валидация env (Joi)
-  prisma/          # @Global PrismaModule + PrismaService
-  common/          # @Roles(), @CurrentUser(), RolesGuard
-  auth/            # AuthService, стратегии, guard'ы (см. «Аутентификация»)
-  telegram/        # Бот (grammy): bootstrap + композеры-хендлеры + исходящие (см. «Telegram»)
-  users/           # UsersService (поиск/создание/профиль/пароль)
-  cart/            # CartService — корзина покупателя
-  addresses/       # AddressesService — адресная книга покупателя (сохранённые адреса)
-  orders/          # OrdersService — заказы, карта переходов статусов, уведомления
-  sellers/         # SellersService (продавцы = арендаторы)
-  categories/      # CategoriesService — категории (master + предложенные продавцом)
-  catalog/         # CatalogService — справочник цветов (master + предложенный продавцом)
-  listings/        # ListingsService — предложения продавца + остаток
-  storage/         # StorageService — S3-совместимое хранилище (фото каталога)
-  admin/           # API-поверхность админки (session-guard'ы)
-  mobile/          # API-поверхность мобилки (JWT-guard'ы)
+  config/ prisma/          # env+Joi · @Global PrismaModule
+  cache/                   # @Global CacheService (Redis, витрина)
+  common/                  # @Roles, @CurrentUser, RolesGuard, курсорная пагинация,
+                           # telegram-identity.ts («один Telegram = одна роль»)
+  auth/                    # стратегии и guard'ы: JWT / session / local
+  users/ sellers/ categories/ catalog/ listings/ cart/ addresses/
+  orders/                  # OrdersService, order-status.ts, order-notifier.service.ts
+  notifications/ metrics/  # in-app лента · агрегаты для дашборда админки
+  storage/                 # StorageService (S3) + ImageService (sharp → webp)
+  telegram/                # бот: bootstrap + композеры + исходящие
+  admin/ mobile/           # API-поверхности (+ admin/upload.options.ts)
 ```
 
-### Доменная модель (`prisma/schema.prisma`)
+## Доменная модель (`prisma/schema.prisma`)
 
-- **User** — `telegramId?` (nullable unique) — **якорь личности мобилки**: вход только через
-  Telegram-бота. `phone?`/`email?` (nullable unique) и `name?` — **опциональные профильные
-  поля**, юзер дозаполняет их сам через `PATCH /mobile/auth/me`. Обязательными они становятся
-  только в checkout: имя и телефон уходят в снапшот заказа, а телефон, если его не было,
-  дописывается сюда (номер, занятый другим аккаунтом, — P2002 — молча пропускается).
-  `passwordHash?` (nullable — есть только у админов),
-  `role` (`SUPER_ADMIN | SELLER | CUSTOMER`), опциональный `sellerId`.
-- **Seller** — продавец (арендатор). Пока одна запись, но модель мультипродавца.
-- **Category** и **CatalogItem** — общий паттерн владения/ревью:
-  - `sellerId = null` → **master**-запись, создаёт только `SUPER_ADMIN`, сразу `status: APPROVED`.
-  - `sellerId` заполнен → продавец предложил свою (категорию или позицию каталога),
-    уходит в `status: PENDING` до апрува `SUPER_ADMIN`'ом (`PATCH …/:id/status`).
-    После апрува видна и доступна **только этому продавцу** (наряду с master),
-    остальным продавцам — не видна и недоступна для выбора/листинга.
-  - На витрине мобилки (`/mobile/categories`, `/mobile/catalog`, `/mobile/listings`)
-    видны **все** `APPROVED`-записи независимо от `sellerId` — ограничение
-    «видно только этому продавцу» касается **создания/выбора**, не показа покупателю.
-  - `Category` — мультиязычные названия `nameRu` (обязательное, фолбэк), `nameUz?/nameEn?/nameKaa?`.
-  - `CatalogItem` — `categoryId` (связь с `Category`), `imageUrl` (S3-ссылка, см.
-    `POST /admin/catalog/:id/image`), `slug` уникален в рамках `sellerId`
-    (партиционный unique-индекс защищает master-scope, `sellerId IS NULL`, от дублей —
-    Prisma не умеет декларировать partial-индексы, он есть только в SQL миграции).
-  - Общий enum `ReviewStatus { PENDING APPROVED REJECTED }`.
-- **Listing** — предложение продавца поверх позиции справочника: `price`,
-  `currency`, `stock` (инвентарь), `status`. Уникальность `(sellerId, catalogItemId)`.
-  При создании листинга `ListingsService` проверяет через `CatalogService.assertUsable`,
-  что `catalogItemId` одобрен и виден продавцу (master `APPROVED` либо его собственный).
-- **RefreshToken** — хэши активных refresh-токенов мобилки (для ротации/отзыва).
-- **TelegramAuthSession** — короткоживущая сессия входа: `nonce` (unique), `telegramId?`/`userId?`
-  (проставляет бот на `/start`), `consumedAt?`, `expiresAt`. Токены в ней **не хранятся** —
-  при консьюме выпускается свежая пара, поэтому в таблице нет секретов.
-- **BotLinkSession** — та же механика «сходить в бота и вернуться», но для **уже известного**
-  пользователя: `userId` берётся из текущей авторизации, а не создаётся ботом. Одна таблица на
-  два назначения (`purpose`): `DELIVERY_LOCATION` (покупатель шлёт геопозицию для адреса) и
-  `SELLER_LINK` (продавец привязывает Telegram к аккаунту админки). `TelegramAuthSession`
-  намеренно оставлена отдельной — она выдаёт токены и консьюмится иначе.
-- **CartItem** — позиция корзины прямо на `User`, без обёртки `Cart`: у пользователя неявно
-  одна корзина, отдельная сущность не нужна (та же логика, что у `RefreshToken`).
-- **SavedAddress** — адресная книга покупателя (`label?`, `address`, `comment?`, `lat?`/`lng?`),
-  `onDelete: Cascade` от `User`. **Не источник правды для отображения заказа** — `Order` держит
-  свой снапшот (`deliveryAddress/deliveryComment/deliveryLat/deliveryLng`) и лишь опциональный
-  `savedAddressId` (`onDelete: SetNull`) для трейсинга «каким сохранённым адресом пользовались».
-  Редактирование или удаление `SavedAddress` задним числом не меняет уже оформленные заказы —
-  тот же принцип, что у `OrderItem` (снапшот `Listing`) и `Order.contactName/contactPhone`
-  (снапшот `User.name/phone`).
-- **Order / OrderItem / OrderStatusHistory** — см. раздел «Заказы».
+**Сущность без собственных полей не заводится**: нет обёртки `Cart` над `CartItem` (корзина у
+юзера неявно одна), нет модели `Checkout` — заказы одного оформления связывает `groupId`.
+
+- **User** — `telegramId?` (nullable unique) — **якорь личности мобилки**. `phone?`/`email?`
+  (nullable unique) и `name?` — опциональные, юзер дозаполняет через `PATCH /mobile/auth/me`;
+  обязательны только в checkout (уходят в снапшот заказа, телефон дописывается в профиль,
+  P2002 молча пропускается). `passwordHash?` только у админов, `role`, `sellerId?`.
+- **Seller** — арендатор: `name`, `description?`, `bannerUrl?`, `status`, `ownerUserId`.
+- **Category** / **CatalogItem** — общий паттерн владения и ревью:
+  `sellerId = null` → **master**, создаёт только `SUPER_ADMIN`, сразу `APPROVED`;
+  `sellerId` заполнен → продавец предложил свою, `PENDING` до апрува (`PATCH …/:id/status`).
+  После апрува доступна для выбора/листинга **только этому продавцу** (наряду с master), но
+  на витрине мобилки видны **все** `APPROVED` — ограничение касается создания, не показа.
+  `Category`: `nameRu` (обязательное, фолбэк) + `nameUz?/nameEn?/nameKaa?`.
+  `CatalogItem`: `categoryId?` (nullable, `Restrict`), `unit` (дефолт «шт»), галерея
+  `images: CatalogItemImage[]`. Общий enum `ReviewStatus`.
+- **Listing** — предложение продавца поверх позиции: `price`, `stock`, `status`
+  (`DRAFT|ACTIVE|ARCHIVED`), `@@unique([sellerId, catalogItemId])`. При создании
+  `CatalogService.assertUsable` проверяет, что позиция одобрена и видна этому продавцу.
+- **Деньги — `Int` в тийинах** (1 сум = 100 тийин), колонки валюты нет.
+- **RefreshToken** — sha256-хэши активных refresh-токенов.
+- **TelegramAuthSession** — вход по nonce; токенов в ней нет (при консьюме выпускается свежая
+  пара), поэтому в таблице нет секретов. **BotLinkSession** — «сходить в бота и вернуться»
+  для уже известного юзера, `purpose` сейчас только `SELLER_LINK`, TTL 300 с.
+- **SavedAddress** — адресная книга (`label?`, `address`, `comment?`, `lat?/lng?`).
+- **Notification** — in-app лента. **Order / OrderItem / OrderStatusHistory** — см. «Заказы»;
+  `orderNumber` autoincrement, по нему ищут в админке.
+
+**Снапшоты, а не FK.** `OrderItem` копирует имя, обложку, единицу и цену; `Order` — контакты,
+адрес и деньги. Листинг может подорожать, уехать в `ARCHIVED` или удалиться (`listingId` →
+`null`), `SavedAddress` — измениться, но оформленный заказ обязан остаться читаемым.
+`savedAddressId` (`SetNull`) хранится только ради трейсинга.
+
+## API
+
+Глобального префикса нет. **Админка** — везде `AuthenticatedGuard + RolesGuard`, кроме `auth`:
+
+| Роут | Роли | Эндпоинты |
+|---|---|---|
+| `admin/auth` | — | `POST login` (LocalAuthGuard), `POST logout`, `GET me`, `POST telegram/link`, `POST telegram/unlink` |
+| `admin/categories` | SUPER_ADMIN, SELLER | CRUD + `PATCH /:id/status` — **только SUPER_ADMIN** (`@Roles` на хендлере перебивает класс) |
+| `admin/catalog` | SUPER_ADMIN, SELLER | CRUD + `POST /:id/images`, `DELETE /:id/images/:imageId`, `PATCH /:id/images/:imageId/reorder` |
+| `admin/listings` | SELLER, SUPER_ADMIN | CRUD, `sellerId` из пользователя |
+| `admin/orders` | SELLER, SUPER_ADMIN | `GET /` (фильтр `status`, поиск по номеру/телефону/имени), `GET /:id`, `PATCH /:id/status`, `PATCH /:id/courier` |
+| `admin/sellers` | SUPER_ADMIN | CRUD + `POST /:id/image` (баннер) |
+| `admin/metrics` | SUPER_ADMIN | `GET users`, `GET orders`, `GET catalog`, `GET overview` |
+
+`SELLER` жёстко скоупится своим `sellerId`; его query-параметр `sellerId` игнорируется.
+
+**Мобилка.** Optional-auth в проекте нет — доступ бинарный, на уровне контроллера.
+
+| Роут | Guard | Эндпоинты |
+|---|---|---|
+| `mobile/auth` | JwtAuthGuard только на `me`/`logout` | `POST telegram/session`, `GET telegram/session/:nonce`, `POST telegram/miniapp`, `POST refresh`, `GET/PATCH me`, `POST logout` |
+| `mobile/listings`, `mobile/categories`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query |
+| `mobile/catalog` | JwtAuthGuard | `GET /` — ⚠️ асимметрия: остальная витрина публичная |
+| `mobile/cart` | JwtAuthGuard | `GET /`, `POST items`, `PATCH/DELETE items/:id`, `DELETE /` |
+| `mobile/addresses` | JwtAuthGuard | CRUD, всё scoped по `userId` |
+| `mobile/orders` | JwtAuthGuard | `POST /`, `GET /`, `GET /:id`, `POST /:id/cancel` |
+| `mobile/notifications` | JwtAuthGuard | `GET /`, `POST read` |
+
+Плюс `GET /health` и `POST /telegram/webhook` (без гварда, сверяет заголовок
+`x-telegram-bot-api-secret-token`, скрыт из Swagger `@ApiExcludeController`).
+
+**Метрики** — счётчики юзеров/заказов/каталога и `overview`; `from`/`to` включительно, оба
+необязательны (нет = за всё время), кэша нет. ⚠️ «Сегодня» считается по UTC, не по Ташкенту;
+`revenue` исключает `CANCELLED`, а `byStatus` — нет, поэтому суммы не сходятся by design.
 
 ## Заказы
 
 **Один checkout = N заказов.** Корзина может содержать листинги разных продавцов, поэтому
-`OrdersService.createFromCart` режет её по `sellerId`: каждому продавцу свой `Order` со своим
-статусом и своей доставкой. Заказы одного оформления связывает поле `groupId` (обычный
-`randomUUID`, генерируется в сервисе). **Отдельной модели `Checkout` нет** — по той же
-причине, по которой нет обёртки `Cart` над `CartItem`: сущность без собственных полей не нужна.
+`createFromCart` режет её по `sellerId`: каждому свой `Order` со своим статусом, все связаны
+`groupId` (`randomUUID`).
 
-**`OrderItem` — полный снапшот, а не FK.** Имя, картинка, единица и цена копируются на момент
-оформления: листинг дорожает, уезжает в `ARCHIVED` или удаляется (`listingId` станет `null`),
-а заказ обязан остаться читаемым. Деньги (`itemsTotal`/`deliveryFee`/`total`) — тоже снапшот,
-как и контакты (`contactName`/`contactPhone`).
-
-**Защита от гонки за остатком.** Списание идёт условным апдейтом внутри транзакции:
+**Гонка за остатком.** Списание — условным апдейтом внутри транзакции:
 `updateMany({ where: { id, stock: { gte: qty } }, data: { stock: { decrement: qty } } })`,
-и `count === 0` роняет всю транзакцию. Проверка остатка *до* транзакции нужна лишь ради
-понятного текста ошибки с названием товара. Тот же приём, что claim сессии в
-`TelegramAuthService.poll`. Отмена заказа возвращает остаток (`increment`) в той же транзакции.
+`count === 0` роняет транзакцию. Проверка *до* транзакции нужна лишь ради понятной ошибки с
+названием товара. Отмена возвращает остаток (`increment`) там же. Тот же приём — claim сессии
+в `TelegramAuthService.poll`.
 
 **Статусы — `src/orders/order-status.ts`.** `ALLOWED_TRANSITIONS` — **единственный источник
-правды**: из неё валидируется `PATCH /admin/orders/:id/status`, строятся inline-кнопки в
-кабинете продавца в боте и селект в админке. Дублировать список где-либо ещё нельзя.
+правды**: из неё валидируется `PATCH /admin/orders/:id/status`, строятся inline-кнопки бота и
+селект в админке. Дублировать нельзя. Там же подписи статусов/кнопок и тексты покупателю.
 
 ```
 NEW → CONFIRMED → ASSEMBLING → DELIVERING → ARRIVED → DELIVERED
         (из любого нетерминального) → CANCELLED
 ```
 
-`ARRIVED` («курьер на месте») существует ради уведомления покупателю «выходите, курьер приехал» —
-продавец жмёт эту кнопку в боте или меняет статус в админке.
+Из `DELIVERING` можно закрыть сразу в `DELIVERED`. `ARRIVED` («курьер на месте») существует
+ради уведомления «выходите». Покупатель отменяет сам только из `NEW`/`CONFIRMED`.
 
-**Оплата.** Пока только `CASH` (наличные курьеру), выбора в UI нет и `paymentMethod` в
-`CreateOrderDto` отсутствует — сервис ставит дефолт. Payme/Click подключаются добавлением
-значений в енам (миграция на одну строку); колонок `providerTxnId`/`providerPayload` в `Order`
-нет намеренно — у провайдера на заказ бывает несколько попыток, это будущая модель `Payment`.
+**Доставка.** Либо `savedAddressId` (тогда сырые поля игнорируются, принадлежность проверяет
+`AddressesService.findOwned`), либо сырые поля — и в этой ветке `deliveryLat`/`deliveryLng`
+**обязательны**: точку даёт Яндекс-пикер на клиенте, гео-API на бэкенде нет. Флаг
+`saveAddress` (только с сырыми полями) кладёт `SavedAddress` в ту же `$transaction`. Адрес
+резолвится **один раз на весь checkout** и копируется во все N заказов. Курьеру уходит текст +
+нативная карточка локации Telegram — у неё встроенная кнопка «Маршрут» в Яндекс/Google Картах.
+Модели курьера нет: `courierName`/`courierPhone` — задел, продавец пересылает карточку сам
+(пересылка сохраняет геоточку).
 
-**Доставка.** Курьер получает три слоя: обязательный текстовый адрес + комментарий,
-необязательные `deliveryLat/Lng` из Telegram-локации и — главное — нативную карточку локации
-в Telegram, у которой есть встроенная кнопка «Маршрут» в Яндекс/Google Картах. Карт-SDK и
-платных API не нужно. Отдельной сущности курьера пока нет: продавец пересылает карточку
-локации своему курьеру (пересылка сохраняет геоточку). Поля `courierName`/`courierPhone` —
-задел: когда появится модель `Courier`, тот же `sendMessage` + `sendLocation` пойдёт ему напрямую.
+**Деньги.** `deliveryFee` всегда `0` и нигде не считается (тарифов нет), `total = itemsTotal`.
+Оплата только `CASH`, поэтому `paymentMethod` в `CreateOrderDto` отсутствует. Payme/Click —
+добавлением значений в енам; `providerTxnId`/`providerPayload` нет намеренно: у провайдера на
+заказ бывает несколько попыток, это будущая модель `Payment`.
 
-**Адресная книга (`SavedAddress`) и снапшот в `CreateOrderDto`.** Покупатель может оформить
-заказ либо сырыми полями (`deliveryAddress`/`deliveryComment`/`deliveryLat`/`deliveryLng`), либо
-сославшись на сохранённый адрес (`savedAddressId`) — тогда сырые поля игнорируются, а
-`deliveryAddress` условно необязателен (`@ValidateIf((o) => !o.savedAddressId)`). Опциональный
-флаг `saveAddress: boolean` (только в паре с сырыми полями, не с `savedAddressId`) создаёт новую
-`SavedAddress` **внутри той же `$transaction`**, что и заказ — конфликтов уникальности тут нет
-(в отличие от бэкфилла телефона ниже), поэтому отдельного пост-коммитного шага не нужно.
-`OrdersService.createFromCart` резолвит адрес **один раз на весь checkout** (до цикла по
-продавцам) и копирует один и тот же снапшот во все N заказов группы — `savedAddressId`
-принадлежность проверяет `AddressesService.findOwned` (публичный метод, переиспользуется отсюда
-же).
+**После коммита**, в этом порядке: `cache.bump()` → бэкфилл телефона/имени → уведомление продавцу.
 
-Эндпоинты:
+## Уведомления
 
-- `POST /mobile/orders` — оформить корзину → массив заказов. **Class-level `JwtAuthGuard`**,
-  как у `mobile-cart.controller.ts` (гостевых заказов нет).
-- `GET /mobile/orders`, `GET /mobile/orders/:id`, `POST /mobile/orders/:id/cancel`
-  (покупатель отменяет только из `NEW`/`CONFIRMED`)
-- `POST /mobile/orders/delivery/location/session` + `GET …/:nonce` — nonce и поллинг адреса.
-  **Объявлены в контроллере раньше `:id`-роутов**, иначе `GET /mobile/orders/:id` их перехватит.
-- `GET/POST /mobile/addresses`, `PATCH/DELETE /mobile/addresses/:id` — CRUD адресной книги
-  (`MobileAddressesController`, class-level `JwtAuthGuard`, всё scoped по `userId` в
-  `AddressesService`, тот же паттерн, что `MobileCartController`/`CartService`).
-- `GET /admin/orders` (фильтр `status`, поиск по номеру/телефону/имени), `GET /admin/orders/:id`,
-  `PATCH /admin/orders/:id/status`, `PATCH /admin/orders/:id/courier` —
-  `AuthenticatedGuard + RolesGuard`, `@Roles(SELLER, SUPER_ADMIN)`. `SELLER` жёстко скоупится
-  своим `sellerId`, и его query-параметр `sellerId` игнорируется — та же схема видимости,
-  что в `CategoriesService`.
+Два канала, оба дёргает `OrderNotifier` (`src/orders/order-notifier.service.ts`):
+**in-app лента** покупателю при смене статуса (вставка в БД обязательна, ошибка не глотается)
+и **Telegram** — продавцу (новый заказ, отмена покупателем) и покупателю дублем (мягкий канал:
+нет токена или `telegramId` — тихий no-op). Дубль нужен потому, что мобилка живёт Mini App'ом
+внутри Telegram: сообщение бота приходит в чат *под* приложением и невидимо, пока юзер в нём.
+
+`GET /mobile/notifications?after&limit` → `{ items, cursor, unreadCount }`;
+`POST …/read` (`ids?`, без них — все; ownership обеспечивает скоуп по `userId`, id от клиента
+ничего не доказывают). Поллинг, без websocket/push.
+
+⚠️ Курсор — `seq Int @unique @default(autoincrement())`, **не `createdAt`**: в Postgres `now()`
+— время старта транзакции, строки одной транзакции делят таймстемп, и `>` терял бы записи, а
+`>=` зацикливался. Без `after` отдаётся бутстрап (последние `limit`, развёрнутые по
+возрастанию) — клиент рисует их прочитанными и не тостит; `cursor` возвращается всегда (на
+пустой странице — эхом присланный). `payload: Json` хранит данные события, а не текст: i18n в
+клиенте. `NotificationsService` не знает ни про заказы, ни про Telegram — поэтому
+`OrdersModule` импортирует его без `forwardRef`.
 
 ## Telegram
 
-Модуль разнесён: **bootstrap отдельно от хендлеров, входящие отдельно от исходящих.**
-
-```
-telegram/
-  telegram-bot.service.ts        # только запуск: токен, вебхук/поллинг, bot.use(композеры)
-  telegram-notify.service.ts     # ИСХОДЯЩИЕ: sendMessage / sendLocation
-  telegram-notify.module.ts      # отдельный модуль без зависимостей
-  telegram-auth.service.ts       # вход в мобилку (nonce + Mini App initData)
-  telegram-link.service.ts       # BotLinkSession: адрес доставки + привязка продавца
-  handlers/customer.composer.ts  # /start <nonce>, /start loc_<nonce>, message:location
-  handlers/seller.composer.ts    # кабинет продавца
-```
+**Bootstrap отдельно от хендлеров, входящие отдельно от исходящих:** `telegram-bot.service.ts`
+(только запуск: токен, вебхук/поллинг, `bot.use`), `telegram-notify.service.ts` (исходящие,
+свой модуль), `telegram-auth.service.ts` (вход в мобилку), `telegram-link.service.ts`
+(привязка/отвязка продавца), `handlers/{seller,customer}.composer.ts`.
 
 **Почему исходящие вынесены.** `OrdersModule` шлёт уведомления, а `seller.composer` зовёт
 `OrdersService` — прямой цикл модулей. Он разорван тем, что `TelegramNotifyService` держит
-собственный `Api` (это просто HTTP-клиент к Bot API), а не инстанс `Bot`. Без этого
-потребовался бы `forwardRef`.
+собственный `Api` (это просто HTTP-клиент к Bot API), а не инстанс `Bot`. Иначе нужен
+`forwardRef`.
 
 **Порядок композеров важен:** сначала `seller`, потом `customer`. Оба ловят `/start`, и
-seller-композер отдаёт управление дальше (`next()`), если у `telegramId` не роль
-`SELLER`/`SUPER_ADMIN`. **Покупательская ветка от этого не изменилась**: Mini App с
-авто-логином, `/start <nonce>` для входа, `/start loc_<nonce>` для адреса — всё как было.
+seller-композер отдаёт управление дальше (`next()`), если `telegramId` не `SELLER`/`SUPER_ADMIN`.
 
-**Кабинет продавца — без Mini App**, на обычных inline-клавиатурах: список активных заказов,
-список «в доставке», карточка заказа с кнопками следующих статусов и URL-кнопкой «Открыть в
-админке» (`ADMIN_URL` — новая переменная окружения).
+**Кабинет продавца — без Mini App**, на inline-клавиатурах: активные заказы, «в доставке»,
+карточка заказа с кнопками следующих статусов и URL-кнопкой «Открыть в админке» (`ADMIN_URL`).
 
-> **`callback_data` — данные от клиента.** Её можно подделать или нажать кнопку из
-> пересланного кому-то сообщения. Поэтому роль и принадлежность заказа проверяются заново
-> на **каждый** колбэк (`resolveSeller` + `OrdersService`), а смена статуса идёт строго через
-> `OrdersService.changeStatus` — там валидация перехода, история и возврат остатка.
-> Прямых `prisma.update` в композере нет.
+> **`callback_data` — данные от клиента:** её можно подделать или нажать кнопку из
+> пересланного сообщения. Поэтому роль и принадлежность заказа проверяются заново на **каждый**
+> колбэк, а смена статуса идёт строго через `OrdersService.changeStatus` (валидация перехода,
+> история, возврат остатка). Прямых `prisma.update` в композере нет.
 
-**Привязка продавца.** В админку продавец входит по email/паролю, `telegramId` у него обычно
-`null`. Кнопка в сайдбаре → `POST /admin/auth/telegram/link` → `BotLinkSession(SELLER_LINK)` →
-ссылка/QR на `t.me/<bot>?start=sel_<nonce>`.
+**Привязка продавца.** В админку он входит по email/паролю, `telegramId` обычно `null`.
+`POST /admin/auth/telegram/link` → `BotLinkSession(SELLER_LINK)` → ссылка/QR на
+`t.me/<bot>?start=sel_<nonce>`. `linkSeller` → `ok | expired | takenByCustomer | takenByStaff`:
+владельца `telegramId` он смотрит **до** апдейта, потому что P2002 знает только «занято», а
+этим случаям нужны разные объяснения (P2002 — бэкстоп на гонку). `POST …/telegram/unlink`
+просто обнуляет `telegramId`: уведомления молча перестают уходить, привязаться можно заново.
 
-### Один Telegram = одна роль (жёсткий блок в обе стороны)
+**Один Telegram = одна роль.** `User.telegramId` несёт ровно один смысл — «кто это»: он и
+якорь входа в мобилку, и адрес кабинета в боте. Совмещать покупателя и staff'а **запрещено в
+обе стороны**, правило и тексты — в `src/common/telegram-identity.ts`.
+*Покупатель → staff:* занятый `telegramId` не переезжает на staff-строку, сессия привязки не
+потребляется. *Staff → покупатель:* `TelegramAuthService.confirm` возвращает `'staff'` и
+**сразу гасит сессию** (`consumedAt`), чтобы мобилка не поллила впустую 180 с, а
+`AuthService.loginWithTelegram` (Mini App) кидает `ForbiddenException`. Иначе выходило
+молчаливое слияние личностей: заказы и телефон покупателя легли бы в учётку продавца. Кому
+нужны обе роли — заводит второй Telegram; автоотвязки у покупателя нет намеренно (`telegramId`
+— единственный вход в его учётку, обнуление осиротило бы заказы и корзину).
 
-`User.telegramId` несёт ровно один смысл — «кто это»; он служит и якорем входа в мобилку, и
-адресом кабинета в боте. Поэтому совмещать в одном Telegram покупателя и staff'а **запрещено
-в обе стороны**. Правило и тексты — в `src/common/telegram-identity.ts`, оба конца ссылаются
-туда, чтобы формулировки не разъехались.
+## Аутентификация
 
-- **Покупатель → staff.** `TelegramLinkService.linkSeller` до апдейта смотрит, кем занят
-  `telegramId`, и возвращает `takenByCustomer` либо `takenByStaff` — P2002 знает только
-  «занято», а этим двум случаям нужны разные объяснения. Занятый `telegramId` **не
-  переезжает** на staff-строку, сессия привязки не потребляется (можно повторить с другого
-  аккаунта). P2002 остаётся бэкстопом на гонку.
-- **Staff → покупатель.** Блокируются **оба** входа в мобилку: `TelegramAuthService.confirm`
-  (бот, `/start <nonce>`) возвращает `'staff'` и **сразу гасит сессию** через `consumedAt`,
-  чтобы мобилка не поллила впустую все 180 с; `AuthService.loginWithTelegram` (Mini App)
-  кидает `ForbiddenException`.
+**Мобилка — JWT (Bearer), access + refresh.** Защита `JwtAuthGuard` (`JWT_ACCESS_SECRET`).
+Payload узкий — только `sub`/`role`/`sellerId` (`AuthPrincipal`): профильные поля
+редактируемые и в токене протухали бы после `PATCH /me`, поэтому `GET /mobile/auth/me` читает
+БД, а не claims. `POST /mobile/auth/refresh` — ротация (старый гасится, выдаётся новая пара);
+в БД `sha256` от токена, в payload `jti`. `POST /mobile/auth/logout` отзывает refresh.
 
-Без этого запрета было две беды. В одну сторону — unique-конфликт с тупиком: logout мобилки
-`telegramId` не освобождает, и привязка становилась невозможна навсегда. В другую, что
-гораздо хуже, — **молчаливое слияние личностей**: `findByTelegramId` находил staff-строку и
-выдавал на неё токены, заказы и телефон покупателя ложились в учётку продавца, а отдельной
-покупательской личности не возникало вовсе.
+**Вход — только через Telegram** (OTP полностью удалён), бот же и регистрация: юзер заводится
+по `telegramId`. Два пути в `AuthService.issueTokens`:
 
-Кому нужны обе роли — заводит второй Telegram-аккаунт под магазин. Автоматической «отвязки»
-намеренно нет: `telegramId` покупателя — единственный способ войти в его учётку, и обнуление
-осиротило бы заказы и корзину.
+1. *nonce + polling* — `POST /mobile/auth/telegram/session` → `{ nonce, botUrl, expiresIn }`,
+   бот ловит `/start <nonce>`, `GET …/session/:nonce` отдаёт `pending | expired | confirmed` +
+   токены. Токены выдаются **ровно один раз**: `consumedAt` ставится условным `updateMany`
+   (`where consumedAt: null`), поэтому гонка двух поллеров не выдаст две пары.
+2. *Mini App* — `POST /mobile/auth/telegram/miniapp { initData }`. Подпись проверяется вручную
+   на `node:crypto` (`secret = HMAC("WebAppData", botToken)`, сверка `hash`, свежесть
+   `auth_date`) — библиотека ради 15 строк не нужна.
 
-## Аутентификация (две стратегии)
+`PATCH /mobile/auth/me` — `{ name?, phone?, email? }`, пустая строка очищает поле, занятые
+`phone`/`email` → **409** (`updateProfile` разбирает `e.meta.target` из P2002).
+Бот: `TELEGRAM_USE_WEBHOOK=false` → long-polling (dev), `true` → `setWebhook` + контроллер.
+Пустой `TELEGRAM_BOT_TOKEN` → приложение поднимается, бот не стартует (warning), входа нет.
 
-### Мобилка — JWT (Bearer), access + refresh
-- Access-токен (короткий TTL) в заголовке `Authorization: Bearer`. Защита —
-  `JwtAuthGuard` (`JwtStrategy`, секрет `JWT_ACCESS_SECRET`).
-- **Payload access-токена узкий** — только `sub`/`role`/`sellerId` (тип `AuthPrincipal`):
-  профильные поля редактируемые, и держать их в токене значило бы отдавать устаревшие
-  значения после `PATCH /me`. Поэтому `GET /mobile/auth/me` **читает БД**, а не claims,
-  и полный профиль (`AuthUser`) существует только как ответ `/me` и в сессии админки.
-- `POST /mobile/auth/refresh` — ротация: старый refresh гасится, выдаётся новая
-  пара. В БД хранится `sha256` от refresh-токена; в payload — `jti` для
-  уникальности. `POST /mobile/auth/logout` отзывает refresh.
+**Админка — session (httpOnly cookie).** `POST /admin/auth/login` (`LocalStrategy`) →
+passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure` в prod).
+Хранилище — Postgres через `connect-pg-simple` (таблица `session` создаётся вне Prisma,
+настройка в `src/main.ts`). Защита — `AuthenticatedGuard`; в сессии только `userId`,
+пользователь подтягивается в `SessionSerializer`.
 
-### Мобилка — вход только через Telegram
-**OTP полностью удалён** (модуль `src/otp/`, каналы доставки, `OtpCode`, `OtpChannel`, nodemailer).
-Единственный вход — Telegram-бот, он же регистрация: юзер заводится по `telegramId`.
+**Роли.** `RolesGuard` + `@Roles(...)` ставится **после** guard'а аутентификации;
+`getAllAndOverride` берёт роли хендлера поверх ролей класса. Матрица — в таблицах «API».
 
-Два пути, оба ведут к `AuthService.issueTokens`:
+## Кэш и пагинация
 
-1. **Нативка/веб — nonce + polling** (`TelegramAuthService`):
-   - `POST /mobile/auth/telegram/session` → `{ nonce, botUrl, expiresIn }`,
-     `botUrl = https://t.me/<TELEGRAM_BOT_USERNAME>?start=<nonce>`.
-   - Бот ловит `/start <nonce>` → `confirm()` привязывает `telegramId`/`userId` к сессии.
-   - `GET /mobile/auth/telegram/session/:nonce` → `pending` | `expired` | `confirmed` + токены.
-     Токены выдаются **ровно один раз**: `consumedAt` ставится условным `updateMany`
-     (`where consumedAt: null`), поэтому гонка двух поллеров не выдаст две пары.
-2. **Mini App — `initData`**: `POST /mobile/auth/telegram/miniapp` `{ initData }`.
-   Подпись проверяется вручную на `node:crypto` (`secret = HMAC("WebAppData", botToken)`,
-   сверка с `hash`, `auth_date` не старше TTL) — библиотека для 15 строк не нужна.
+**`CacheService`** (`@Global`, ioredis): `wrap(ns, params, fn)` и `bump()`. Ключ —
+`sf:<version>:<ns>:<sha1(stableStringify(params))>`; `stableStringify` сортирует ключи и
+выбрасывает `undefined`, иначе порядок полей DTO после `ValidationPipe({transform})` давал бы
+разные хэши на один запрос. Инвалидация — `INCR sf:ver`: O(1), старые ключи становятся
+недостижимы и истекают сами, без SCAN/DEL.
 
-- **Бот** (`TelegramBotService`, grammy): `TELEGRAM_USE_WEBHOOK=false` → long-polling (dev, без
-  публичного URL); `true` → `setWebhook` + `TelegramWebhookController` (`POST /telegram/webhook`,
-  без гварда, сверяет заголовок `x-telegram-bot-api-secret-token`; скрыт из Swagger через
-  `@ApiExcludeController`). Пустой `TELEGRAM_BOT_TOKEN` → приложение поднимается, бот не стартует
-  (warning в лог), вход недоступен.
-- `PATCH /mobile/auth/me` — `{ name?, phone?, email? }`, все опциональны, пустая строка очищает
-  поле. Занятые `phone`/`email` → **409** (`UsersService.updateProfile` ловит `P2002` и разбирает
-  `e.meta.target`, чтобы сказать, какое поле конфликтует).
-- Env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, `TELEGRAM_USE_WEBHOOK`,
-  `TELEGRAM_WEBHOOK_URL`, `TELEGRAM_WEBHOOK_SECRET`, `TG_AUTH_SESSION_TTL_SECONDS`.
+- Кэшируется **только публичная витрина** (`listings`, `listing`, `categories`, `catalog`,
+  `seller`); админские списки — никогда. Пустой `REDIS_URL` → кэш выключен.
+- Fail-open: любая ошибка Redis = промах. `enableOfflineQueue: false`, `family: 0`
+  (IPv6-DNS Railway), лог ошибок троттлится до 1/мин.
+- Исключения из `fn` не кэшируются. Значения ходят через JSON, поэтому `Date` возвращается
+  строкой — для HTTP-ответа нормально, как Prisma-сущность использовать нельзя.
+- `bump()` зовут все мутации каталога/категорий/листингов/продавца и заказы — ⚠️ **после
+  коммита**: изнутри транзакции кэш успел бы перезаполниться доккоммитными данными.
 
-### Админка — Session (httpOnly cookie)
-- `POST /admin/auth/login` (`LocalStrategy`, email+password) → passport-сессия,
-  cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure` в prod).
-- Хранилище сессий — **Postgres** через `connect-pg-simple` (таблица `session`
-  создаётся автоматически, вне Prisma). Настройка в `src/main.ts`.
-- Защита роутов — `AuthenticatedGuard` (`req.isAuthenticated()`). Сессия
-  сериализует только `userId`, пользователь подтягивается в `SessionSerializer`.
-- `GET /admin/auth/me`, `POST /admin/auth/logout`.
+**Курсорная пагинация** (`src/common/pagination.ts`, `CursorPaginationDto`): `cursor?` (id
+последнего элемента) + `limit` (1..100, дефолт 20) → `{ items, nextCursor }`. Контракт: сервис
+обязан запрашивать `take: limit + 1` (лишняя строка — признак «есть ещё», `toCursorPage` её
+срезает) и держать `orderBy`, **заканчивающийся на `id`** — только это делает курсор
+детерминированным. Используют listings, catalog, categories, orders, sellers; лента
+уведомлений идёт по своему `seq` и этот контракт не использует.
 
-### Авторизация по ролям
-`RolesGuard` + `@Roles(...)` (ставить ПОСЛЕ guard'а аутентификации):
-- `SUPER_ADMIN` — категории и справочник (`/admin/categories`, `/admin/catalog`) без
-  ограничений, апрув/реджект чужих предложений (`PATCH …/:id/status`), продавцы (`/admin/sellers`);
-- `SELLER` — тоже имеет доступ к `/admin/categories` и `/admin/catalog` (создание
-  своих + просмотр master `APPROVED`), но `PATCH …/:id/status` — только `SUPER_ADMIN`
-  (переопределяется на уровне хендлера через `@Roles` — `getAllAndOverride` берёт
-  роли хендлера, а не класса). Свои листинги — `/admin/listings`
-  (sellerId берётся из пользователя);
-- `CUSTOMER` — витрина мобилки.
+## Фото
 
-### Хранилище фото (`src/storage/`)
-- `StorageService` — S3-совместимый клиент (`@aws-sdk/client-s3`, `forcePathStyle: true`).
-  Локально — **MinIO** (`docker-compose.yml`, бакет `catalog`, публичное чтение),
-  на проде — **Cloudflare R2**. Меняются только env (`S3_*`), код не трогаем.
-- ⚠️ `S3_PUBLIC_URL` указывает на **конкретный бакет**, имя бакета входит в
-  значение (`http://localhost:9000/catalog` для MinIO, публичный домен для R2).
-  `upload()` склеивает ссылку как `${S3_PUBLIC_URL}/${key}` и `S3_BUCKET` в путь
-  не подставляет — он нужен только для самих S3-вызовов.
-- `POST /admin/catalog/:id/image` (multipart, поле `file`, `FileInterceptor` с
-  `memoryStorage`, лимит 5MB, только `image/*`) — загружает в S3 и обновляет
-  `CatalogItem.imageUrl`. Владелец-проверка: `SELLER` может грузить фото только
-  для своих позиций.
+`imageUploadOptions` (`src/admin/upload.options.ts`) — общие multer-опции: memoryStorage,
+лимит 5 МБ, дешёвый пре-фильтр по клиентскому mimetype.
+
+`ImageService.toWebp` (`sharp`): `metadata()` → проверка **декодированного** формата по белому
+списку (jpeg/png/webp/avif/heif/gif/tiff; **SVG запрещён** — бакет публичный, SVG исполняет
+скрипты) → `.rotate()` (EXIF-ориентация применяется до того, как метаданные срежутся) → resize
+1600 `fit: inside` без апскейла → webp q80. EXIF/GPS не сохраняются; расширение и content-type
+берутся из результата конверсии, никогда из `originalname`.
+
+`StorageService` — S3-клиент (`forcePathStyle: true`). ⚠️ `S3_PUBLIC_URL` указывает на
+**конкретный бакет**, имя бакета входит в значение (`http://localhost:9000/catalog` у MinIO,
+публичный домен у R2); ссылка склеивается как `${S3_PUBLIC_URL}/${key}`, `S3_BUCKET` нужен
+только для самих S3-вызовов. `keyFromUrl` — инверсия через отрезание префикса (регуляркой
+нельзя: у MinIO бакет в пути, у R2 — нет).
+
+**Галерея каталога:** `CatalogItemImage` (`url`, `sortOrder`, каскад от `CatalogItem`), максимум
+10 фото, всегда `orderBy sortOrder asc`. Reorder — обмен `sortOrder` с соседом
+(`direction: 'up'|'down'`) в транзакции; удаление сначала гасит объект в S3 (fire-and-forget,
+ошибка логируется), потом строку. Обложка (`images[0].url`) копируется в
+`OrderItem.catalogItemImageUrl`. `SELLER` грузит фото только для своих позиций. Баннер
+продавца (`POST /admin/sellers/:id/image` → `Seller.bannerUrl`) — тот же пайплайн.
 
 ## Деплой (Railway)
 
-`railway.json`: билд — `pnpm build` (внутри `prisma generate && nest build`),
-старт — `pnpm start:railway` (`prisma migrate deploy && node dist/main`),
-healthcheck на `/health`.
+`railway.json`: билд `pnpm build`, старт `pnpm start:railway`, healthcheck `/health`.
+Инфраструктура: Railway (сервис + Postgres + Redis) + **Cloudflare R2** для фото — Railway
+Buckets приватные и публичных URL не дают, а ссылка на фото лежит в БД постоянной (presigned
+не подходит). Специфика `NODE_ENV=production` (`src/main.ts`):
 
-Инфраструктура: **Railway** (сервис + Postgres-аддон) + **Cloudflare R2** (фото).
-R2, а не Railway Buckets: последние приватные, публичных URL не дают
-(«Public buckets are currently not supported»), а `CatalogItem.imageUrl` хранится
-в БД постоянной ссылкой — presigned не подходит.
-
-Что специфично для прода (`NODE_ENV=production`) в `src/main.ts`:
-- `app.set('trust proxy', 1)` — иначе за TLS-терминатором Railway
-  `express-session` не поставит cookie с `secure: true`;
-- cookie сессии `sameSite: 'none'` — админка на другом домене, cookie cross-site;
+- `app.set('trust proxy', 1)` — иначе за TLS-терминатором `express-session` не поставит cookie
+  с `secure: true`;
+- cookie сессии `sameSite: 'none'` — админка на другом домене;
 - `app.listen(port, '0.0.0.0')` — на `localhost` прокси не достучится (502);
-- `CORS_ORIGIN` — точный список доменов, не `*` (с `credentials: true` браузер
-  отклоняет `*`).
-
-Telegram-бот на проде — **только webhook** (`TELEGRAM_USE_WEBHOOK=true` +
-`TELEGRAM_WEBHOOK_URL`): при редеплое/нескольких репликах два поллера конфликтуют.
-
-`numReplicas: 1` в `railway.json` не случайно — при масштабировании появятся
-конфликт поллеров бота (если вернуть polling) и гонки на инвентаре в заказах.
+- `CORS_ORIGIN` — точный список доменов, не `*` (с `credentials: true` браузер отклоняет `*`);
+- бот — **только webhook**: при редеплое и нескольких репликах два поллера конфликтуют.
+  `numReplicas: 1` не случайно — масштабирование даёт те же конфликты и гонки на инвентаре.
 
 ## Конвенции
 
-- DTO — классы с `class-validator` + `@ApiProperty`. Глобальный `ValidationPipe`
-  (`whitelist`, `transform`, `forbidNonWhitelisted`) — лишние поля отклоняются.
-- Новый домен: `*.service.ts` (Prisma внутри) + `*.module.ts` (экспорт сервиса),
-  контроллеры — в `admin/` и/или `mobile/`, а не в доменном модуле.
-- Типы из `@prisma/client`, используемые в **декорированных сигнатурах**
-  (`@CurrentUser() u: AuthUser`), импортировать через `import type`
-  (`isolatedModules` + `emitDecoratorMetadata`).
-- После правки `schema.prisma`: `pnpm db:migrate` (создаёт миграцию в `prisma/migrations/`
-  + генерит клиент). Миграции коммитим в git; на проде — `pnpm db:deploy`.
-- `prisma/` исключена из `nest build` (`tsconfig.build.json`), иначе сдвигается
-  `dist/` (main оказывается в `dist/src/`).
+- DTO — классы с `class-validator` + `@ApiProperty`; глобальный `ValidationPipe`
+  (`whitelist`, `transform`, `forbidNonWhitelisted`) отклоняет лишние поля.
+- Типы из `@prisma/client` в **декорированных сигнатурах** (`@CurrentUser() u: AuthUser`) —
+  через `import type` (`isolatedModules` + `emitDecoratorMetadata`).
+- После правки `schema.prisma` — `pnpm db:migrate`; на проде `pnpm db:deploy`.
+- `prisma/` исключена из `nest build` (`tsconfig.build.json`), иначе сдвигается `dist/`.
+- `CLAUDE.md` — просто `@AGENTS.md`, копии нет: правится только этот файл.
 
 ## Проверка изменений
 
-Мобильный флоу и админский session-флоу проверяются curl'ом (см. README/историю
-коммитов). Ключевые инварианты: витрина без токена → 401; старый refresh после
-ротации → 401; сессии появляются в таблице `session` Postgres; `SELLER`, создавая
-категорию/позицию каталога, получает `status: PENDING`, а `SUPER_ADMIN` — сразу
-`APPROVED`; второй `SELLER` не видит и не может использовать чужую кастомную
-категорию/позицию (403 при попытке сослаться на чужой `categoryId`/`catalogItemId`
-в листинге).
+⚠️ **Автотестов фактически нет:** ни одного `*.spec.ts` в `src/`. `test/app.e2e-spec.ts` —
+нетронутый скаффолд Nest, ждёт `GET /` → `Hello World!`, такого роута нет, так что
+`pnpm test:e2e` падает by construction. Всё проверяется руками (curl / Swagger). Инварианты,
+которые стоит прогонять:
 
-> `AGENTS.md` — копия этого файла. При изменениях правьте оба (или синхронизируйте).
+- витрина без токена: `listings`/`categories`/`sellers` — 200, `catalog`/`cart`/`orders`/
+  `notifications` — 401;
+- старый refresh после ротации → 401; сессии админки появляются в таблице `session`;
+- `SELLER`, создавая категорию/позицию каталога, получает `PENDING`, `SUPER_ADMIN` — `APPROVED`;
+- второй `SELLER` не видит чужую кастомную категорию/позицию и не может сослаться на неё
+  в листинге (403);
+- заказ на количество больше `stock` не проходит; отмена возвращает остаток;
+- после мутации каталога витрина сразу отдаёт свежие данные (значит `bump()` не забыт).
