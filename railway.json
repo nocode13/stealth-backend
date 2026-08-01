@@ -2,7 +2,7 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "pnpm build"
+    "buildCommand": "chmod +x node_modules/.bin/* && pnpm build"
   },
   "deploy": {
     "startCommand": "pnpm start:railway",
