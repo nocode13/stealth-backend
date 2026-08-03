@@ -56,13 +56,13 @@ src/
   config/ prisma/          # env+Joi · @Global PrismaModule
   cache/                   # @Global CacheService (Redis, витрина)
   common/                  # @Roles, @CurrentUser, RolesGuard, курсорная пагинация,
-                           # telegram-identity.ts («один Telegram = одна роль»)
+                           # telegram-identity.ts (покупатель и staff — разные учётки)
   auth/                    # стратегии и guard'ы: JWT / session / local
   users/ sellers/ categories/ catalog/ listings/ cart/ addresses/
   orders/                  # OrdersService, order-status.ts, order-notifier.service.ts
   notifications/ metrics/  # in-app лента · агрегаты для дашборда админки
   storage/                 # StorageService (S3) + ImageService (sharp → webp)
-  telegram/                # бот: bootstrap + композеры + исходящие
+  telegram/                # два бота: bootstrap + композеры + исходящие + вход по номеру
   admin/ mobile/           # API-поверхности (+ admin/upload.options.ts)
 ```
 
@@ -71,10 +71,13 @@ src/
 **Сущность без собственных полей не заводится**: нет обёртки `Cart` над `CartItem` (корзина у
 юзера неявно одна), нет модели `Checkout` — заказы одного оформления связывает `groupId`.
 
-- **User** — `telegramId?` (nullable unique) — **якорь личности мобилки**. `phone?`/`email?`
-  (nullable unique) и `name?` — опциональные, юзер дозаполняет через `PATCH /mobile/auth/me`;
-  обязательны только в checkout (уходят в снапшот заказа, телефон дописывается в профиль,
-  P2002 молча пропускается). `passwordHash?` только у админов, `role`, `sellerId?`.
+- **User** — `telegramId?` (nullable unique) — **якорь личности покупателя** (основной бот);
+  `staffTelegramId?` (nullable unique) — адрес кабинета в боте продавца, колонки независимы
+  (см. «Telegram»). `phone?`/`email?` (nullable unique) и `name?` — опциональные, юзер
+  дозаполняет через `PATCH /mobile/auth/me`; обязательны только в checkout (уходят в снапшот
+  заказа, телефон дописывается в профиль, P2002 молча пропускается). При входе по номеру
+  `phone` заполняется сразу — он уже подтверждён. `passwordHash?` только у админов, `role`,
+  `sellerId?`.
 - **Seller** — арендатор: `name`, `description?`, `bannerUrl?`, `status`, `ownerUserId`.
 - **Category** / **CatalogItem** — общий паттерн владения и ревью:
   `sellerId = null` → **master**, создаёт только `SUPER_ADMIN`, сразу `APPROVED`;
@@ -92,6 +95,10 @@ src/
 - **TelegramAuthSession** — вход по nonce; токенов в ней нет (при консьюме выпускается свежая
   пара), поэтому в таблице нет секретов. **BotLinkSession** — «сходить в бота и вернуться»
   для уже известного юзера, `purpose` сейчас только `SELLER_LINK`, TTL 300 с.
+- **PhoneAuthSession** — вход по номеру (TTL 600 с: юзеру надо сходить в бота и вернуться).
+  Хранит заявленный `phone`, `telegramId`/`name` из бота, `codeHash` (sha256 OTP, `null` —
+  номер ещё не подтверждён), счётчик `attempts` и флаг `mismatch`. Отдельная модель, а не
+  поля в `TelegramAuthSession`: другой жизненный цикл (два шага подтверждения).
 - **SavedAddress** — адресная книга (`label?`, `address`, `comment?`, `lat?/lng?`).
 - **Notification** — in-app лента. **Order / OrderItem / OrderStatusHistory** — см. «Заказы»;
   `orderNumber` autoincrement, по нему ищут в админке.
@@ -121,7 +128,7 @@ src/
 
 | Роут | Guard | Эндпоинты |
 |---|---|---|
-| `mobile/auth` | JwtAuthGuard только на `me`/`logout` | `POST telegram/session`, `GET telegram/session/:nonce`, `POST telegram/miniapp`, `POST refresh`, `GET/PATCH me`, `POST logout` |
+| `mobile/auth` | JwtAuthGuard только на `me`/`logout` | `POST telegram/session`, `GET telegram/session/:nonce`, `POST telegram/miniapp`, `POST phone/session`, `GET phone/session/:nonce`, `POST phone/verify`, `POST refresh`, `GET/PATCH me`, `POST logout` |
 | `mobile/listings`, `mobile/categories`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query |
 | `mobile/catalog` | JwtAuthGuard | `GET /` — ⚠️ асимметрия: остальная витрина публичная |
 | `mobile/cart` | JwtAuthGuard | `GET /`, `POST items`, `PATCH/DELETE items/:id`, `DELETE /` |
@@ -129,8 +136,9 @@ src/
 | `mobile/orders` | JwtAuthGuard | `POST /`, `GET /`, `GET /:id`, `POST /:id/cancel` |
 | `mobile/notifications` | JwtAuthGuard | `GET /`, `POST read` |
 
-Плюс `GET /health` и `POST /telegram/webhook` (без гварда, сверяет заголовок
-`x-telegram-bot-api-secret-token`, скрыт из Swagger `@ApiExcludeController`).
+Плюс `GET /health` и вебхуки `POST /telegram/webhook` (основной бот) и
+`POST /telegram/webhook/seller` (бот продавца) — без гварда, каждый сверяет свой секрет в
+заголовке `x-telegram-bot-api-secret-token`, скрыты из Swagger `@ApiExcludeController`.
 
 **Метрики** — счётчики юзеров/заказов/каталога и `overview`; `from`/`to` включительно, оба
 необязательны (нет = за всё время), кэша нет. ⚠️ «Сегодня» считается по UTC, не по Ташкенту;
@@ -180,9 +188,10 @@ NEW → CONFIRMED → ASSEMBLING → DELIVERING → ARRIVED → DELIVERED
 
 Два канала, оба дёргает `OrderNotifier` (`src/orders/order-notifier.service.ts`):
 **in-app лента** покупателю при смене статуса (вставка в БД обязательна, ошибка не глотается)
-и **Telegram** — продавцу (новый заказ, отмена покупателем) и покупателю дублем (мягкий канал:
-нет токена или `telegramId` — тихий no-op). Дубль нужен потому, что мобилка живёт Mini App'ом
-внутри Telegram: сообщение бота приходит в чат *под* приложением и невидимо, пока юзер в нём.
+и **Telegram** — продавцу в бот продавца (новый заказ, отмена покупателем, по
+`staffTelegramId`) и покупателю дублем в основной бот (по `telegramId`; мягкий канал: нет
+токена или id — тихий no-op). Дубль нужен потому, что мобилка живёт Mini App'ом внутри
+Telegram: сообщение бота приходит в чат *под* приложением и невидимо, пока юзер в нём.
 
 `GET /mobile/notifications?after&limit` → `{ items, cursor, unreadCount }`;
 `POST …/read` (`ids?`, без них — все; ownership обеспечивает скоуп по `userId`, id от клиента
@@ -198,44 +207,55 @@ NEW → CONFIRMED → ASSEMBLING → DELIVERING → ARRIVED → DELIVERED
 
 ## Telegram
 
+**Ботов два.** **Основной** (`TELEGRAM_BOT_TOKEN`) — покупатели: вход в мобилку и уведомления
+им же. **Продавца** (`TELEGRAM_SELLER_BOT_TOKEN`) — кабинет заказов и уведомления продавцу.
+Разделены потому, что один человек может быть и покупателем, и продавцом; каждый бот ищет
+своего юзера по своей колонке (`telegramId` против `staffTelegramId`). Пустой токен любого из
+них → приложение поднимается, эта часть просто не работает (warning в лог).
+
 **Bootstrap отдельно от хендлеров, входящие отдельно от исходящих:** `telegram-bot.service.ts`
-(только запуск: токен, вебхук/поллинг, `bot.use`), `telegram-notify.service.ts` (исходящие,
-свой модуль), `telegram-auth.service.ts` (вход в мобилку), `telegram-link.service.ts`
-(привязка/отвязка продавца), `handlers/{seller,customer}.composer.ts`.
+(только запуск: приватный `startBot()` поднимает оба бота, `handleUpdate(target, update)`),
+`telegram-notify.service.ts` (исходящие, свой модуль), `telegram-auth.service.ts` (вход через
+Telegram), `phone-auth.service.ts` (вход по номеру), `telegram-link.service.ts`
+(привязка/отвязка продавца), `handlers/{seller,customer}.composer.ts` — по композеру на бот,
+цепочек `next()` между ними больше нет.
 
 **Почему исходящие вынесены.** `OrdersModule` шлёт уведомления, а `seller.composer` зовёт
 `OrdersService` — прямой цикл модулей. Он разорван тем, что `TelegramNotifyService` держит
-собственный `Api` (это просто HTTP-клиент к Bot API), а не инстанс `Bot`. Иначе нужен
-`forwardRef`.
+собственные `Api` (это просто HTTP-клиенты к Bot API), а не инстансы `Bot`. Иначе нужен
+`forwardRef`. Методы разведены по адресату — `sendToCustomer` (по `telegramId`, основной бот)
+и `sendToSeller`/`sendLocationToSeller` (по `staffTelegramId`, бот продавца), чтобы нельзя
+было перепутать бот и id.
 
-**Порядок композеров важен:** сначала `seller`, потом `customer`. Оба ловят `/start`, и
-seller-композер отдаёт управление дальше (`next()`), если `telegramId` не `SELLER`/`SUPER_ADMIN`.
+**Вебхуки.** `POST /telegram/webhook` — основной, `POST /telegram/webhook/seller` — продавца,
+у каждого свой секрет (`TELEGRAM_WEBHOOK_SECRET` / `TELEGRAM_SELLER_WEBHOOK_SECRET`).
+URL продавца производный: `${TELEGRAM_WEBHOOK_URL}/seller` — чтобы на проде не заводить ещё
+одну переменную с почти тем же значением.
 
 **Кабинет продавца — без Mini App**, на inline-клавиатурах: активные заказы, «в доставке»,
 карточка заказа с кнопками следующих статусов и URL-кнопкой «Открыть в админке» (`ADMIN_URL`).
+`/start` без payload от не-продавца — подсказка «вам в @<основной бот>».
 
 > **`callback_data` — данные от клиента:** её можно подделать или нажать кнопку из
 > пересланного сообщения. Поэтому роль и принадлежность заказа проверяются заново на **каждый**
 > колбэк, а смена статуса идёт строго через `OrdersService.changeStatus` (валидация перехода,
 > история, возврат остатка). Прямых `prisma.update` в композере нет.
 
-**Привязка продавца.** В админку он входит по email/паролю, `telegramId` обычно `null`.
+**Привязка продавца.** В админку он входит по email/паролю, `staffTelegramId` обычно `null`.
 `POST /admin/auth/telegram/link` → `BotLinkSession(SELLER_LINK)` → ссылка/QR на
-`t.me/<bot>?start=sel_<nonce>`. `linkSeller` → `ok | expired | takenByCustomer | takenByStaff`:
-владельца `telegramId` он смотрит **до** апдейта, потому что P2002 знает только «занято», а
-этим случаям нужны разные объяснения (P2002 — бэкстоп на гонку). `POST …/telegram/unlink`
-просто обнуляет `telegramId`: уведомления молча перестают уходить, привязаться можно заново.
+`t.me/<бот продавца>?start=sel_<nonce>`. `linkSeller` → `ok | expired | takenByStaff`:
+владельца `staffTelegramId` он смотрит **до** апдейта, потому что P2002 знает только «занято»
+(P2002 — бэкстоп на гонку). `POST …/telegram/unlink` обнуляет `staffTelegramId`: уведомления
+молча перестают уходить, привязаться можно заново.
 
-**Один Telegram = одна роль.** `User.telegramId` несёт ровно один смысл — «кто это»: он и
-якорь входа в мобилку, и адрес кабинета в боте. Совмещать покупателя и staff'а **запрещено в
-обе стороны**, правило и тексты — в `src/common/telegram-identity.ts`.
-*Покупатель → staff:* занятый `telegramId` не переезжает на staff-строку, сессия привязки не
-потребляется. *Staff → покупатель:* `TelegramAuthService.confirm` возвращает `'staff'` и
-**сразу гасит сессию** (`consumedAt`), чтобы мобилка не поллила впустую 180 с, а
-`AuthService.loginWithTelegram` (Mini App) кидает `ForbiddenException`. Иначе выходило
-молчаливое слияние личностей: заказы и телефон покупателя легли бы в учётку продавца. Кому
-нужны обе роли — заводит второй Telegram; автоотвязки у покупателя нет намеренно (`telegramId`
-— единственный вход в его учётку, обнуление осиротило бы заказы и корзину).
+**Покупатель и staff — разные учётки, даже если Telegram один.** `telegramId` — адрес
+покупателя в основном боте (и якорь входа в мобилку), `staffTelegramId` — адрес кабинета в
+боте продавца; обе колонки unique, но независимы, поэтому совмещение ролей разрешено и
+никаких проверок «это staff, не пускаем» больше нет (`src/common/telegram-identity.ts`).
+Раньше колонка была одна и запрет был нужен, иначе выходило молчаливое слияние личностей:
+заказы и телефон покупателя ложились в учётку продавца. Оставшийся инвариант — один Telegram
+= максимум один покупатель и максимум один staff-аккаунт. Автоотвязки у покупателя нет
+намеренно: `telegramId` — вход в его учётку, обнуление осиротило бы заказы и корзину.
 
 ## Аутентификация
 
@@ -245,8 +265,7 @@ Payload узкий — только `sub`/`role`/`sellerId` (`AuthPrincipal`): �
 БД, а не claims. `POST /mobile/auth/refresh` — ротация (старый гасится, выдаётся новая пара);
 в БД `sha256` от токена, в payload `jti`. `POST /mobile/auth/logout` отзывает refresh.
 
-**Вход — только через Telegram** (OTP полностью удалён), бот же и регистрация: юзер заводится
-по `telegramId`. Два пути в `AuthService.issueTokens`:
+**Вход — только через основной бот**, он же и регистрация. Три пути в `AuthService.issueTokens`:
 
 1. *nonce + polling* — `POST /mobile/auth/telegram/session` → `{ nonce, botUrl, expiresIn }`,
    бот ловит `/start <nonce>`, `GET …/session/:nonce` отдаёт `pending | expired | confirmed` +
@@ -255,11 +274,36 @@ Payload узкий — только `sub`/`role`/`sellerId` (`AuthPrincipal`): �
 2. *Mini App* — `POST /mobile/auth/telegram/miniapp { initData }`. Подпись проверяется вручную
    на `node:crypto` (`secret = HMAC("WebAppData", botToken)`, сверка `hash`, свежесть
    `auth_date`) — библиотека ради 15 строк не нужна.
+3. *По номеру телефона* — `PhoneAuthService`, см. ниже.
+
+**Вход по номеру (`src/telegram/phone-auth.service.ts`, `PhoneAuthSession`).**
+`POST /mobile/auth/phone/session { phone }` → `{ nonce, botUrl, expiresIn, codeSent }` →
+`/start otp_<nonce>` в основном боте → бот показывает кнопку **«Поделиться номером»**
+(`request_contact`) → `GET …/phone/session/:nonce` отдаёт `pending | code_sent | mismatch |
+expired` → `POST …/phone/verify { nonce, code }` → токены (тот же однократный claim).
+
+⚠️ Ключевое: **введённый номер сам по себе ничего не доказывает** — иначе любой занял бы
+чужой (`phone` unique и уходит в снапшоты заказов). Настоящий номер даёт Telegram в
+`message:contact`, мы сверяем его с заявленным, и только при совпадении шлём 6-значный код.
+Контакт принимается лишь свой (`contact.user_id === from.id`, чужой можно переслать),
+несовпадение гасит сессию (`mismatch`), 5 неверных кодов — тоже. Анти-флуд свой,
+на подсчёте сессий по номеру (throttler в проекте нет): 5 за 15 минут → **429**.
+
+Коллизии решаются строго, без слияния учёток: юзер по `telegramId` → дописываем ему `phone`;
+юзера нет, но номер занят учёткой **без** `telegramId` → привязываем; номер занят учёткой с
+другим `telegramId` → **409**; никого нет → создаём.
+
+**Тестовый аккаунт Play Store.** `TEST_LOGIN_PHONE` + `TEST_LOGIN_OTP` (работает, только если
+заданы **обе**): с этим номером `phone/session` не создаёт ссылку на бота, а сразу отдаёт
+`botUrl: null, codeSent: true`, и `phone/verify` принимает вечный код. У ревьюера Google нет
+доступа к нашему боту — без этой ветки верификацию не пройти. Юзер под тест-номер заводится
+лениво, при первом входе (сид намеренно содержит только супер-админа).
 
 `PATCH /mobile/auth/me` — `{ name?, phone?, email? }`, пустая строка очищает поле, занятые
 `phone`/`email` → **409** (`updateProfile` разбирает `e.meta.target` из P2002).
-Бот: `TELEGRAM_USE_WEBHOOK=false` → long-polling (dev), `true` → `setWebhook` + контроллер.
-Пустой `TELEGRAM_BOT_TOKEN` → приложение поднимается, бот не стартует (warning), входа нет.
+Боты: `TELEGRAM_USE_WEBHOOK=false` → long-polling (dev), `true` → `setWebhook` + контроллер.
+Пустой `TELEGRAM_BOT_TOKEN` → приложение поднимается, основной бот не стартует (warning),
+входа нет.
 
 **Админка — session (httpOnly cookie).** `POST /admin/auth/login` (`LocalStrategy`) →
 passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure` в prod).
@@ -330,7 +374,8 @@ Buckets приватные и публичных URL не дают, а ссыл�
 - cookie сессии `sameSite: 'none'` — админка на другом домене;
 - `app.listen(port, '0.0.0.0')` — на `localhost` прокси не достучится (502);
 - `CORS_ORIGIN` — точный список доменов, не `*` (с `credentials: true` браузер отклоняет `*`);
-- бот — **только webhook**: при редеплое и нескольких репликах два поллера конфликтуют.
+- боты — **только webhook** (оба, режим общий): при редеплое и нескольких репликах два
+  поллера конфликтуют.
   `numReplicas: 1` не случайно — масштабирование даёт те же конфликты и гонки на инвентаре.
 
 ## Конвенции
@@ -357,4 +402,10 @@ Buckets приватные и публичных URL не дают, а ссыл�
 - второй `SELLER` не видит чужую кастомную категорию/позицию и не может сослаться на неё
   в листинге (403);
 - заказ на количество больше `stock` не проходит; отмена возвращает остаток;
-- после мутации каталога витрина сразу отдаёт свежие данные (значит `bump()` не забыт).
+- после мутации каталога витрина сразу отдаёт свежие данные (значит `bump()` не забыт);
+- вход по номеру: чужой пересланный контакт и контакт с другим номером → отказ (`mismatch`),
+  верный код логинит, повтор того же `phone/verify` → 401, 6 сессий на номер за 15 мин → 429;
+- с заданными `TEST_LOGIN_PHONE`/`TEST_LOGIN_OTP` вход по тест-номеру проходит **не открывая
+  Telegram** (`botUrl: null`, `codeSent: true`); с пустыми env тот же номер идёт обычным путём;
+- один Telegram даёт две независимые учётки: вход в мобилку через основной бот и кабинет
+  через бота продавца (заказ от покупательской учётки приходит продавцу в его бот).

@@ -8,11 +8,10 @@ import { ConfigService } from '@nestjs/config';
 import { BotSessionPurpose, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { isStaffRole } from '../common/telegram-identity';
+import { TELEGRAM_TAKEN_BY_STAFF } from '../common/telegram-identity';
 
 /** Исход привязки: под каждый — свой текст в чате, см. telegram-identity.ts. */
-export type LinkSellerResult =
-  'ok' | 'expired' | 'takenByCustomer' | 'takenByStaff';
+export type LinkSellerResult = 'ok' | 'expired' | 'takenByStaff';
 
 export interface BotLinkCreated {
   nonce: string;
@@ -26,8 +25,8 @@ const PREFIX: Record<BotSessionPurpose, string> = {
 };
 
 /**
- * Сессия «сходить в бота и вернуться» для уже авторизованного пользователя —
- * привязка Telegram продавца. (Раньше сюда же входил адрес доставки покупателя —
+ * Сессия «сходить в бота продавца и вернуться» для уже авторизованного
+ * пользователя — привязка его Telegram к рабочему аккаунту. (Раньше сюда же входил адрес доставки покупателя —
  * тот флоу выпилен в пользу пикера карты, см. stealth-mobile.)
  *
  * Механика та же, что у входа (TelegramAuthService): nonce в диплинке + поллинг.
@@ -49,9 +48,10 @@ export class TelegramLinkService {
     userId: string,
     purpose: BotSessionPurpose,
   ): Promise<BotLinkCreated> {
-    const botUsername = this.config.get<string>('telegram.botUsername');
+    // Привязка ведёт в бот ПРОДАВЦА: кабинет и уведомления живут там.
+    const botUsername = this.config.get<string>('telegramSeller.botUsername');
     if (!botUsername) {
-      throw new BadRequestException('Telegram-бот не сконфигурирован');
+      throw new BadRequestException('Бот продавца не сконфигурирован');
     }
 
     const nonce = randomBytes(18).toString('base64url');
@@ -74,36 +74,34 @@ export class TelegramLinkService {
   // ─────────────────────────── привязка продавца ───────────────────────────
 
   /**
-   * Бот получил /start sel_<nonce>: пишем telegramId в аккаунт продавца.
+   * Бот продавца получил /start sel_<nonce>: пишем staffTelegramId в его аккаунт.
    *
-   * telegramId уникален, а личный Telegram продавца мог уже войти в мобилку
-   * отдельным аккаунтом-покупателем. Тогда P2002 → 409 с внятным текстом,
-   * а не 500.
+   * Покупательская учётка с тем же Telegram привязке не мешает — она живёт в
+   * другой колонке. А вот второй рабочий аккаунт на тот же Telegram нельзя:
+   * staffTelegramId уникален, тогда P2002 → внятный текст, а не 500.
    */
   async linkSeller(
     nonce: string,
-    telegramId: string,
+    staffTelegramId: string,
   ): Promise<LinkSellerResult> {
     const session = await this.findLive(nonce, BotSessionPurpose.SELLER_LINK);
     if (!session) return 'expired';
 
-    // Разбираем, КЕМ занят Telegram, до апдейта: P2002 знает только «занято»,
-    // а покупателю и владельцу другого магазина нужны разные объяснения.
     const occupant = await this.prisma.user.findUnique({
-      where: { telegramId },
+      where: { staffTelegramId },
     });
     if (occupant && occupant.id !== session.userId) {
       this.logger.warn(
-        `Привязка отклонена: telegramId=${telegramId} занят ${occupant.role}-аккаунтом.`,
+        `Привязка отклонена: staffTelegramId=${staffTelegramId} занят ${occupant.role}-аккаунтом.`,
       );
-      return isStaffRole(occupant.role) ? 'takenByStaff' : 'takenByCustomer';
+      return 'takenByStaff';
     }
 
     try {
       await this.prisma.$transaction([
         this.prisma.user.update({
           where: { id: session.userId },
-          data: { telegramId },
+          data: { staffTelegramId },
         }),
         this.prisma.botLinkSession.update({
           where: { id: session.id },
@@ -123,21 +121,24 @@ export class TelegramLinkService {
     }
   }
 
-  /** Обратная операция к linkSeller: освобождает telegramId. */
+  /** Обратная операция к linkSeller: освобождает staffTelegramId. */
   async unlinkSeller(userId: string): Promise<void> {
     await this.prisma.user.update({
       where: { id: userId },
-      data: { telegramId: null },
+      data: { staffTelegramId: null },
     });
   }
 
-  /** Кидает 409, если этот Telegram уже занят другим пользователем. */
-  async assertTelegramFree(telegramId: string, userId: string): Promise<void> {
-    const owner = await this.prisma.user.findUnique({ where: { telegramId } });
+  /** Кидает 409, если этот Telegram уже ведёт другой рабочий аккаунт. */
+  async assertTelegramFree(
+    staffTelegramId: string,
+    userId: string,
+  ): Promise<void> {
+    const owner = await this.prisma.user.findUnique({
+      where: { staffTelegramId },
+    });
     if (owner && owner.id !== userId) {
-      throw new ConflictException(
-        'Этот Telegram уже привязан к другому аккаунту',
-      );
+      throw new ConflictException(TELEGRAM_TAKEN_BY_STAFF);
     }
   }
 

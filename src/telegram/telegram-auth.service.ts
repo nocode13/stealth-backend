@@ -9,7 +9,6 @@ import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { AuthService, TokenPair } from '../auth/auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
-import { isStaffRole } from '../common/telegram-identity';
 
 // Данные пользователя, приходящие от Telegram (и из /start, и из initData).
 export interface TelegramUser {
@@ -31,7 +30,7 @@ export type TelegramSessionStatus =
   | ({ status: 'confirmed' } & TokenPair);
 
 // Собирает имя из того, что дал Telegram. Пустая строка → null (имя не обязательно).
-function displayName(user: TelegramUser): string | null {
+export function displayName(user: TelegramUser): string | null {
   const full = [user.first_name, user.last_name]
     .filter(Boolean)
     .join(' ')
@@ -75,12 +74,8 @@ export class TelegramAuthService {
   }
 
   // Шаг 2: бот получил /start <nonce> — привязываем к сессии живого юзера.
-  // 'expired' — сессия не найдена/просрочена, 'staff' — под рабочим аккаунтом
-  // в мобилку не пускаем (см. common/telegram-identity.ts). Бот озвучит исход в чат.
-  async confirm(
-    nonce: string,
-    from: TelegramUser,
-  ): Promise<'ok' | 'expired' | 'staff'> {
+  // 'expired' — сессия не найдена/просрочена. Бот озвучит исход в чат.
+  async confirm(nonce: string, from: TelegramUser): Promise<'ok' | 'expired'> {
     const session = await this.prisma.telegramAuthSession.findUnique({
       where: { nonce },
     });
@@ -89,23 +84,14 @@ export class TelegramAuthService {
     }
 
     const telegramId = String(from.id);
-    let user = await this.users.findByTelegramId(telegramId);
-    if (user && isStaffRole(user.role)) {
-      // Гасим сессию сразу, чтобы мобилка не поллила впустую все 180 с: юзер
-      // уже прочитал причину в чате с ботом, ждать нечего.
-      await this.prisma.telegramAuthSession.update({
-        where: { id: session.id },
-        data: { consumedAt: new Date() },
-      });
-      this.logger.warn(
-        `Вход в мобилку под staff-аккаунтом отклонён: telegramId=${telegramId}`,
-      );
-      return 'staff';
-    }
-    user ??= await this.users.createFromTelegram({
-      telegramId,
-      name: displayName(from),
-    });
+    // Продавцу вход не запрещён: его рабочая учётка живёт на staffTelegramId,
+    // покупательская — на telegramId (см. common/telegram-identity.ts).
+    const user =
+      (await this.users.findByTelegramId(telegramId)) ??
+      (await this.users.createFromTelegram({
+        telegramId,
+        name: displayName(from),
+      }));
 
     await this.prisma.telegramAuthSession.update({
       where: { id: session.id },

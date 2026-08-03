@@ -20,7 +20,7 @@ export const envValidationSchema = Joi.object({
 
   SESSION_SECRET: Joi.string().required(),
 
-  // Telegram — единственный способ входа в мобилку.
+  // Основной бот: вход покупателя в мобилку и уведомления ему же.
   // Токен/username optional: без них приложение поднимается, но бот не стартует
   // (логируется warning) — удобно для тестов и админских сборок.
   TELEGRAM_BOT_TOKEN: Joi.string().allow('').optional(),
@@ -29,6 +29,23 @@ export const envValidationSchema = Joi.object({
   TELEGRAM_WEBHOOK_URL: Joi.string().allow('').optional(),
   TELEGRAM_WEBHOOK_SECRET: Joi.string().allow('').optional(),
   TG_AUTH_SESSION_TTL_SECONDS: Joi.number().default(180),
+
+  // Бот продавца: кабинет и уведомления о заказах. Отдельный бот, потому что один
+  // и тот же человек может быть и покупателем, и продавцом. Режим (вебхук/поллинг)
+  // общий с основным; URL вебхука производный — `${TELEGRAM_WEBHOOK_URL}/seller`.
+  TELEGRAM_SELLER_BOT_TOKEN: Joi.string().allow('').optional(),
+  TELEGRAM_SELLER_BOT_USERNAME: Joi.string().allow('').optional(),
+  TELEGRAM_SELLER_WEBHOOK_SECRET: Joi.string().allow('').optional(),
+
+  // Вход по номеру телефона. TTL больше, чем у входа через Telegram: юзеру нужно
+  // уйти в бота, поделиться контактом и вернуться в приложение.
+  PHONE_AUTH_SESSION_TTL_SECONDS: Joi.number().default(600),
+
+  // Тестовый аккаунт для проверки в Play Store: с этим номером вход идёт мимо
+  // Telegram, а кодом служит вечный TEST_LOGIN_OTP. Работает, только если обе
+  // переменные непустые; по умолчанию выключено.
+  TEST_LOGIN_PHONE: Joi.string().allow('').optional(),
+  TEST_LOGIN_OTP: Joi.string().allow('').optional(),
 
   // S3-совместимое хранилище фото (локально — MinIO из docker-compose).
   S3_ENDPOINT: Joi.string().required(),
@@ -76,6 +93,20 @@ export default () => ({
       process.env.TG_AUTH_SESSION_TTL_SECONDS ?? '180',
       10,
     ),
+    phoneAuthTtlSeconds: parseInt(
+      process.env.PHONE_AUTH_SESSION_TTL_SECONDS ?? '600',
+      10,
+    ),
+  },
+  telegramSeller: {
+    botToken: process.env.TELEGRAM_SELLER_BOT_TOKEN,
+    botUsername: process.env.TELEGRAM_SELLER_BOT_USERNAME,
+    webhookSecret: process.env.TELEGRAM_SELLER_WEBHOOK_SECRET,
+  },
+  // Байпас включён, только когда заданы обе переменные (см. PhoneAuthService).
+  testLogin: {
+    phone: process.env.TEST_LOGIN_PHONE,
+    otp: process.env.TEST_LOGIN_OTP,
   },
   s3: {
     endpoint: process.env.S3_ENDPOINT,

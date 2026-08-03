@@ -1,8 +1,4 @@
-import {
-  ForbiddenException,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { User } from '@prisma/client';
@@ -10,7 +6,6 @@ import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
-import { isStaffRole, STAFF_CANNOT_SHOP } from '../common/telegram-identity';
 
 export interface TokenPair {
   accessToken: string;
@@ -31,6 +26,7 @@ export class AuthService {
     return {
       id: user.id,
       telegramId: user.telegramId,
+      staffTelegramId: user.staffTelegramId,
       phone: user.phone,
       email: user.email,
       name: user.name,
@@ -54,18 +50,15 @@ export class AuthService {
   // Вход мобилки: find-or-create по telegramId, дальше обычные токены.
   // Профиль (phone/email) не трогаем — юзер заполняет его сам в настройках.
   //
-  // Под staff-аккаунтом в мобилку не пускаем: иначе заказы и телефон покупателя
-  // легли бы в учётку продавца, а отдельной покупательской личности не возникло бы
-  // (см. common/telegram-identity.ts).
+  // Продавцу вход не запрещён: его рабочая учётка живёт на staffTelegramId в боте
+  // продавца, покупательская — здесь, и это разные строки (telegram-identity.ts).
   async loginWithTelegram(tg: {
     telegramId: string;
     name?: string | null;
   }): Promise<TokenPair> {
-    let user = await this.users.findByTelegramId(tg.telegramId);
-    if (user && isStaffRole(user.role)) {
-      throw new ForbiddenException(STAFF_CANNOT_SHOP);
-    }
-    user ??= await this.users.createFromTelegram(tg);
+    const user =
+      (await this.users.findByTelegramId(tg.telegramId)) ??
+      (await this.users.createFromTelegram(tg));
     return this.issueTokens(user.id);
   }
 

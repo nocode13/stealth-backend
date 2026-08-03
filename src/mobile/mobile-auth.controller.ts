@@ -15,17 +15,21 @@ import { AuthService } from '../auth/auth.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RefreshDto } from '../auth/dto/auth.dto';
 import { TelegramMiniAppDto, UpdateProfileDto } from '../auth/dto/telegram.dto';
+import { PhoneSessionDto, PhoneVerifyDto } from '../auth/dto/phone.dto';
+import { PhoneAuthService } from '../telegram/phone-auth.service';
 import { TelegramAuthService } from '../telegram/telegram-auth.service';
 import { UsersService } from '../users/users.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
-// Аутентификация мобилки: вход только через Telegram, access + refresh токены.
+// Аутентификация мобилки: вход через Telegram или по номеру телефона (код из
+// бота), access + refresh токены.
 @ApiTags('mobile/auth')
 @Controller('mobile/auth')
 export class MobileAuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly telegram: TelegramAuthService,
+    private readonly phone: PhoneAuthService,
     private readonly users: UsersService,
   ) {}
 
@@ -45,6 +49,34 @@ export class MobileAuthController {
   })
   pollTelegramSession(@Param('nonce') nonce: string) {
     return this.telegram.poll(nonce);
+  }
+
+  @Post('phone/session')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Начать вход по номеру: nonce + ссылка на бота',
+    description:
+      'Номер подтверждается в боте кнопкой «Поделиться номером», после чего бот ' +
+      'присылает код. codeSent=true (и botUrl=null) — шаг с ботом не нужен, ' +
+      'сразу вводим код: так устроен тестовый аккаунт для проверки в Play Store.',
+  })
+  createPhoneSession(@Body() dto: PhoneSessionDto) {
+    return this.phone.createSession(dto.phone);
+  }
+
+  @Get('phone/session/:nonce')
+  @ApiOperation({
+    summary: 'Статус входа по номеру: pending / code_sent / mismatch / expired',
+  })
+  pollPhoneSession(@Param('nonce') nonce: string) {
+    return this.phone.poll(nonce);
+  }
+
+  @Post('phone/verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Подтвердить код из бота и получить токены' })
+  verifyPhoneCode(@Body() dto: PhoneVerifyDto) {
+    return this.phone.verify(dto.nonce, dto.code);
   }
 
   @Post('telegram/miniapp')

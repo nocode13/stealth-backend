@@ -58,6 +58,25 @@ export class UsersService {
     });
   }
 
+  // Регистрация по номеру телефона: номер уже подтверждён (контакт из Telegram
+  // либо тестовый аккаунт), поэтому кладём его сразу. telegramId null — только у
+  // тестового аккаунта Play Store, у него шага с ботом нет.
+  createFromPhoneLogin(data: {
+    telegramId: string | null;
+    phone: string;
+    name?: string | null;
+    role?: Role;
+  }): Promise<User> {
+    return this.prisma.user.create({
+      data: {
+        telegramId: data.telegramId,
+        phone: data.phone,
+        name: data.name ?? null,
+        role: data.role ?? Role.CUSTOMER,
+      },
+    });
+  }
+
   // Дозаполнение профиля. Все поля опциональны; пустая строка = очистить поле
   // (иначе уникальный индекс не даст второму юзеру сохранить тот же "").
   async updateProfile(

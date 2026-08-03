@@ -4,6 +4,7 @@ import { OrdersModule } from '../orders/orders.module';
 import { UsersModule } from '../users/users.module';
 import { CustomerComposer } from './handlers/customer.composer';
 import { SellerComposer } from './handlers/seller.composer';
+import { PhoneAuthService } from './phone-auth.service';
 import { TelegramAuthService } from './telegram-auth.service';
 import { TelegramBotService } from './telegram-bot.service';
 import { TelegramLinkService } from './telegram-link.service';
@@ -16,11 +17,12 @@ import { TelegramWebhookController } from './telegram-webhook.controller';
   controllers: [TelegramWebhookController],
   providers: [
     TelegramAuthService,
+    PhoneAuthService,
     TelegramLinkService,
     TelegramBotService,
     SellerComposer,
     CustomerComposer,
   ],
-  exports: [TelegramAuthService, TelegramLinkService],
+  exports: [TelegramAuthService, PhoneAuthService, TelegramLinkService],
 })
 export class TelegramModule {}

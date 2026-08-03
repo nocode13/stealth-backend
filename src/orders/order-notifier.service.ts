@@ -84,22 +84,22 @@ export class OrderNotifier {
   async orderCreated(orders: OrderWithDetails[]): Promise<void> {
     for (const order of orders) {
       try {
-        const telegramId = await this.sellerTelegramId(order.sellerId);
-        if (!telegramId) {
+        const staffTelegramId = await this.sellerTelegramId(order.sellerId);
+        if (!staffTelegramId) {
           this.logger.warn(
             `Продавец ${order.sellerId} не привязал Telegram — заказ #${order.orderNumber} только в админке.`,
           );
           continue;
         }
         const { text, keyboard } = this.buildSellerCard(order);
-        await this.telegram.sendMessage(
-          telegramId,
+        await this.telegram.sendToSeller(
+          staffTelegramId,
           `🆕 <b>Новый заказ!</b>\n\n${text}`,
           keyboard,
         );
         if (order.deliveryLat != null && order.deliveryLng != null) {
-          await this.telegram.sendLocation(
-            telegramId,
+          await this.telegram.sendLocationToSeller(
+            staffTelegramId,
             order.deliveryLat,
             order.deliveryLng,
           );
@@ -136,7 +136,7 @@ export class OrderNotifier {
 
     try {
       const telegramId = await this.customerTelegramId(order.userId);
-      await this.telegram.sendMessage(
+      await this.telegram.sendToCustomer(
         telegramId,
         `<b>Заказ #${order.orderNumber}</b>\n${message}`,
       );
@@ -150,9 +150,9 @@ export class OrderNotifier {
   /** Покупатель отменил сам → сообщаем продавцу, чтобы тот не собирал зря. */
   async cancelledByCustomer(order: OrderWithDetails): Promise<void> {
     try {
-      const telegramId = await this.sellerTelegramId(order.sellerId);
-      await this.telegram.sendMessage(
-        telegramId,
+      const staffTelegramId = await this.sellerTelegramId(order.sellerId);
+      await this.telegram.sendToSeller(
+        staffTelegramId,
         `❌ Покупатель отменил заказ <b>#${order.orderNumber}</b>.` +
           (order.cancelReason
             ? `\nПричина: ${escapeHtml(order.cancelReason)}`
@@ -165,12 +165,13 @@ export class OrderNotifier {
     }
   }
 
+  /** Адрес продавца — в боте ПРОДАВЦА, поэтому staffTelegramId, а не telegramId. */
   private async sellerTelegramId(sellerId: string): Promise<string | null> {
     const seller = await this.prisma.seller.findUnique({
       where: { id: sellerId },
-      select: { owner: { select: { telegramId: true } } },
+      select: { owner: { select: { staffTelegramId: true } } },
     });
-    return seller?.owner.telegramId ?? null;
+    return seller?.owner.staffTelegramId ?? null;
   }
 
   private async customerTelegramId(userId: string): Promise<string | null> {
