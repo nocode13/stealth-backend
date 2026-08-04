@@ -10,13 +10,18 @@ export interface AuthPrincipal {
 }
 
 // Полный профиль — ответ /me и то, что кладёт в сессию админка (читается из БД).
-// telegramId — якорь личности мобилки; phone/email/name опциональны, пока юзер
-// не заполнит их сам, поэтому в access-токене их НЕТ (они редактируемые).
+// telegramId — якорь личности мобилки (основной бот), staffTelegramId — привязка
+// к боту продавца; phone/email/name опциональны, пока юзер не заполнит их сам,
+// поэтому в access-токене их НЕТ (они редактируемые).
 export interface AuthUser extends AuthPrincipal {
   telegramId: string | null;
+  staffTelegramId: string | null;
   phone: string | null;
   email: string | null;
   name: string | null;
+  // Тестовый аккаунт Play Store (common/test-account.ts): мобилка по нему
+  // помечает профиль как read-only, PATCH /mobile/auth/me для него отдаёт 403.
+  isTest: boolean;
 }
 
 // Достаёт аутентифицированного пользователя из request (кладут стратегии/сессия).

@@ -62,8 +62,9 @@ export class AdminAuthController {
   @ApiOperation({
     summary: 'Ссылка для привязки Telegram к аккаунту',
     description:
-      'Продавец переходит по botUrl и жмёт Start — после этого заказы приходят ' +
-      'ему в бота и он может менять их статус прямо в чате.',
+      'Продавец переходит по botUrl (бот ПРОДАВЦА, отдельный от покупательского) ' +
+      'и жмёт Start — после этого заказы приходят ему в бота и он может менять ' +
+      'их статус прямо в чате. Тот же Telegram может параллельно быть покупателем.',
   })
   linkTelegram(@CurrentUser() user: AuthUser) {
     return this.links.createSession(user.id, BotSessionPurpose.SELLER_LINK);
@@ -76,11 +77,11 @@ export class AdminAuthController {
   @ApiOperation({
     summary: 'Отвязать Telegram от аккаунта',
     description:
-      'Освобождает telegramId — заказы перестают приходить в бота. ' +
+      'Освобождает staffTelegramId — заказы перестают приходить в бота продавца. ' +
       'Привязать заново можно в любой момент через /telegram/link.',
   })
   async unlinkTelegram(@CurrentUser() user: AuthUser): Promise<AuthUser> {
     await this.links.unlinkSeller(user.id);
-    return { ...user, telegramId: null };
+    return { ...user, staffTelegramId: null };
   }
 }

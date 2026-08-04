@@ -78,8 +78,12 @@ enum BotSessionPurpose {
 
 model User {
   id           String   @id @default(cuid())
-  // telegramId — якорь личности мобилки: вход только через Telegram-бота.
+  // telegramId — якорь личности покупателя: адрес в ОСНОВНОМ боте и вход в мобилку.
   telegramId   String?  @unique
+  // staffTelegramId — адрес кабинета в боте ПРОДАВЦА. Колонки разные намеренно:
+  // у продавца и покупателя может быть один и тот же Telegram, это две разные
+  // учётки, и каждый бот ищет своего юзера по своей колонке.
+  staffTelegramId String? @unique
   // phone/email/name — опциональные профильные поля, юзер дозаполняет их сам.
   // В профиле они так и остаются опциональными, но checkout требует телефон и имя:
   // они уходят в снапшот заказа (Order.contactPhone/contactName), а телефон,
@@ -90,7 +94,9 @@ model User {
   // passwordHash опционален: он есть только у админов (вход по паролю в админку).
   passwordHash String?
   role         Role     @default(CUSTOMER)
-  // Продавец, к которому привязан пользователь (для роли SELLER).
+  // Продавец, к которому привязан пользователь (для роли SELLER). Их может быть
+  // несколько на одного продавца — это команда (Seller.members), и уведомления о
+  // заказах уходят всем её участникам с привязанным staffTelegramId.
   sellerId     String?
   seller       Seller?  @relation("SellerMembers", fields: [sellerId], references: [id], onDelete: SetNull)
   // Продавец, которым владеет пользователь (owner). Обратная сторона Seller.owner.
@@ -104,6 +110,8 @@ model User {
   updatedAt    DateTime @updatedAt
 
   @@index([createdAt])
+  // Команда продавца: список сотрудников в админке и веер уведомлений о заказах.
+  @@index([sellerId])
   @@map("users")
 }
 
@@ -122,6 +130,30 @@ model TelegramAuthSession {
 
   @@index([expiresAt])
   @@map("telegram_auth_sessions")
+}
+
+// Вход по номеру телефона: номер заявляется в мобилке, подтверждается в основном
+// боте кнопкой «Поделиться номером» (request_contact), и только после совпадения
+// номеров бот присылает OTP. Отдельная модель, а не поля в TelegramAuthSession:
+// у неё другой жизненный цикл (два шага подтверждения) и свои счётчики.
+model PhoneAuthSession {
+  id         String    @id @default(cuid())
+  nonce      String    @unique
+  phone      String // E.164, заявлен в мобилке
+  codeHash   String? // sha256(OTP); null = номер ещё не подтверждён в боте
+  telegramId String? // проставляется ботом на /start otp_<nonce>
+  name       String? // имя из Telegram, чтобы дожило до verify
+  userId     String? // резолвится на verify (у тестовой сессии — сразу)
+  attempts   Int       @default(0) // неудачные вводы кода, на 5-м сессия гаснет
+  mismatch   Boolean   @default(false) // контакт не совпал с заявленным номером
+  consumedAt DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+
+  @@index([phone])
+  @@index([telegramId])
+  @@index([expiresAt])
+  @@map("phone_auth_sessions")
 }
 
 // Короткоживущая сессия «сходить в бота и вернуться» — та же механика, что у

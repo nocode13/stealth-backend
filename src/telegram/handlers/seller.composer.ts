@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { OrderStatus, Role, type User } from '@prisma/client';
 import { Composer, InlineKeyboard } from 'grammy';
 import type { Context } from 'grammy';
@@ -7,10 +8,7 @@ import { OrderNotifier } from '../../orders/order-notifier.service';
 import { ORDER_STATUS_LABELS } from '../../orders/order-status';
 import { OrdersService } from '../../orders/orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import {
-  CUSTOMER_CANNOT_BE_STAFF,
-  TELEGRAM_TAKEN_BY_STAFF,
-} from '../../common/telegram-identity';
+import { TELEGRAM_TAKEN_BY_STAFF } from '../../common/telegram-identity';
 import {
   TelegramLinkService,
   type LinkSellerResult,
@@ -31,7 +29,6 @@ const ACTIVE: OrderStatus[] = [
 
 const REPLY_BY_LINK_RESULT: Record<Exclude<LinkSellerResult, 'ok'>, string> = {
   expired: 'Ссылка привязки устарела. Сгенерируйте новую в админке.',
-  takenByCustomer: CUSTOMER_CANNOT_BE_STAFF,
   takenByStaff: TELEGRAM_TAKEN_BY_STAFF,
 };
 
@@ -42,6 +39,8 @@ const menuKeyboard = new InlineKeyboard()
 
 /**
  * Кабинет продавца прямо в чате с ботом — без Mini App, на inline-клавиатурах.
+ * Живёт в ОТДЕЛЬНОМ боте продавца и ищет юзера по `staffTelegramId`: тот же самый
+ * Telegram может быть покупателем в основном боте, это независимая учётка.
  *
  * ВАЖНО ПРО БЕЗОПАСНОСТЬ: `callback_data` — это данные от клиента, их можно
  * подделать или нажать кнопку из пересланного кому-то сообщения. Поэтому роль
@@ -60,6 +59,7 @@ export class SellerComposer {
     private readonly orders: OrdersService,
     private readonly notifier: OrderNotifier,
     private readonly links: TelegramLinkService,
+    private readonly config: ConfigService,
   ) {}
 
   build(): Composer<Context> {
@@ -86,12 +86,14 @@ export class SellerComposer {
       );
     });
 
-    // /start без payload от продавца — меню кабинета. Всем остальным (покупателям)
-    // отдаём управление дальше, в customer.composer, где прежний текст.
-    composer.command('start', async (ctx, next) => {
-      if (ctx.match?.trim()) return next();
+    // /start без payload — меню кабинета. Этот бот только для продавцов, поэтому
+    // всех остальных отправляем в основной бот, а не молчим.
+    composer.command('start', async (ctx) => {
       const seller = await this.resolveSeller(ctx);
-      if (!seller) return next();
+      if (!seller) {
+        await ctx.reply(this.notSellerText());
+        return;
+      }
 
       await ctx.reply(
         `Кабинет продавца${seller.sellerName ? ` — ${seller.sellerName}` : ''}.\nВыберите раздел:`,
@@ -185,7 +187,12 @@ export class SellerComposer {
     statuses: OrderStatus[],
   ): Promise<void> {
     const orders = await this.prisma.order.findMany({
-      where: { sellerId: seller.principal.sellerId!, status: { in: statuses } },
+      // sellerId нет только у SUPER_ADMIN без магазина — ему показываем все заказы,
+      // а не пустой список (раньше фильтр по null молча ничего не находил).
+      where: {
+        sellerId: seller.principal.sellerId ?? undefined,
+        status: { in: statuses },
+      },
       orderBy: { createdAt: 'desc' },
       take: PAGE_SIZE,
       select: {
@@ -222,13 +229,14 @@ export class SellerComposer {
   }
 
   /**
-   * Кто нажал кнопку. Возвращает null для всех, кто не продавец, — тогда
-   * покупательская ветка отрабатывает как обычно, а колбэки просто отклоняются.
+   * Кто нажал кнопку. Ищем по `staffTelegramId` — покупательская учётка с тем же
+   * Telegram (колонка `telegramId`) кабинет не открывает. null — не продавец,
+   * колбэки от него отклоняются.
    */
   private async resolveSeller(ctx: Context): Promise<SellerContext | null> {
     if (!ctx.from) return null;
     const user: User | null = await this.prisma.user.findUnique({
-      where: { telegramId: String(ctx.from.id) },
+      where: { staffTelegramId: String(ctx.from.id) },
     });
     if (!user) return null;
     if (user.role !== Role.SELLER && user.role !== Role.SUPER_ADMIN)
@@ -250,6 +258,17 @@ export class SellerComposer {
 
   private async denyCallback(ctx: Context): Promise<void> {
     await ctx.reply('Этот раздел доступен только продавцам.');
+  }
+
+  /** Покупатель зашёл не в тот бот — подсказываем основной. */
+  private notSellerText(): string {
+    const mainBot = this.config.get<string>('telegram.botUsername');
+    return (
+      'Этот бот — рабочий кабинет продавца.' +
+      (mainBot
+        ? ` Если вы покупатель, вам в @${mainBot}.`
+        : ' Если вы покупатель, откройте приложение.')
+    );
   }
 
   private errorText(error: unknown): string {
