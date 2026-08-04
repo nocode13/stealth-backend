@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma, Role, User } from '@prisma/client';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { AuthService, TokenPair } from '../auth/auth.service';
+import { normalizePhone } from '../common/phone';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { displayName, type TelegramUser } from './telegram-auth.service';
@@ -353,11 +354,6 @@ export class PhoneAuthService {
       );
     }
   }
-}
-
-/** К единому виду `+998…`: Telegram отдаёт номер и без плюса. */
-export function normalizePhone(phone: string): string {
-  return `+${phone.replace(/\D/g, '')}`;
 }
 
 function hash(value: string): string {

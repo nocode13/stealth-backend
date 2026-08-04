@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
+import { isTestAccount } from '../common/test-account';
 
 export interface TokenPair {
   accessToken: string;
@@ -32,6 +33,7 @@ export class AuthService {
       name: user.name,
       role: user.role,
       sellerId: user.sellerId,
+      isTest: isTestAccount(user.phone, this.config),
     };
   }
 

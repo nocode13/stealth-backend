@@ -102,7 +102,12 @@ export class MobileAuthController {
   @Get('me')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Текущий пользователь мобилки' })
+  @ApiOperation({
+    summary: 'Текущий пользователь мобилки',
+    description:
+      'isTest=true — тестовый аккаунт для проверки в Play Store: профиль у него ' +
+      'read-only, PATCH /mobile/auth/me вернёт 403.',
+  })
   async me(@CurrentUser('id') userId: string) {
     const user = await this.users.findById(userId);
     if (!user) throw new NotFoundException('Пользователь не найден');
@@ -114,6 +119,9 @@ export class MobileAuthController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Дозаполнить профиль (имя / телефон / email, все опциональны)',
+    description:
+      'Занятые phone/email → 409. Тестовому аккаунту (isTest в GET /me) правка ' +
+      'профиля запрещена целиком → 403.',
   })
   async updateMe(
     @CurrentUser('id') userId: string,
