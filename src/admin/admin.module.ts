@@ -15,6 +15,7 @@ import { AdminListingsController } from './admin-listings.controller';
 import { AdminMetricsController } from './admin-metrics.controller';
 import { AdminOrdersController } from './admin-orders.controller';
 import { AdminSellersController } from './admin-sellers.controller';
+import { AdminSellerStaffController } from './admin-seller-staff.controller';
 
 // API-поверхность админки. Логика — в доменных модулях, тут только контроллеры
 // с session-guard'ами и Swagger-тегами.
@@ -38,6 +39,7 @@ import { AdminSellersController } from './admin-sellers.controller';
     AdminMetricsController,
     AdminOrdersController,
     AdminSellersController,
+    AdminSellerStaffController,
   ],
 })
 export class AdminModule {}

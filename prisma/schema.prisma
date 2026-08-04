@@ -94,7 +94,9 @@ model User {
   // passwordHash опционален: он есть только у админов (вход по паролю в админку).
   passwordHash String?
   role         Role     @default(CUSTOMER)
-  // Продавец, к которому привязан пользователь (для роли SELLER).
+  // Продавец, к которому привязан пользователь (для роли SELLER). Их может быть
+  // несколько на одного продавца — это команда (Seller.members), и уведомления о
+  // заказах уходят всем её участникам с привязанным staffTelegramId.
   sellerId     String?
   seller       Seller?  @relation("SellerMembers", fields: [sellerId], references: [id], onDelete: SetNull)
   // Продавец, которым владеет пользователь (owner). Обратная сторона Seller.owner.
@@ -108,6 +110,8 @@ model User {
   updatedAt    DateTime @updatedAt
 
   @@index([createdAt])
+  // Команда продавца: список сотрудников в админке и веер уведомлений о заказах.
+  @@index([sellerId])
   @@map("users")
 }
 

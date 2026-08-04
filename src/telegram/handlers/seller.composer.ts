@@ -187,7 +187,12 @@ export class SellerComposer {
     statuses: OrderStatus[],
   ): Promise<void> {
     const orders = await this.prisma.order.findMany({
-      where: { sellerId: seller.principal.sellerId!, status: { in: statuses } },
+      // sellerId нет только у SUPER_ADMIN без магазина — ему показываем все заказы,
+      // а не пустой список (раньше фильтр по null молча ничего не находил).
+      where: {
+        sellerId: seller.principal.sellerId ?? undefined,
+        status: { in: statuses },
+      },
       orderBy: { createdAt: 'desc' },
       take: PAGE_SIZE,
       select: {

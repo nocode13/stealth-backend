@@ -80,30 +80,32 @@ export class OrderNotifier {
     return { text: lines.join('\n'), keyboard };
   }
 
-  /** Новый заказ → продавцу карточка + нативная локация с кнопкой «Маршрут». */
+  /** Новый заказ → всей команде продавца карточка + нативная локация с «Маршрутом». */
   async orderCreated(orders: OrderWithDetails[]): Promise<void> {
     for (const order of orders) {
       try {
-        const staffTelegramId = await this.sellerTelegramId(order.sellerId);
-        if (!staffTelegramId) {
+        const recipients = await this.sellerTelegramIds(order.sellerId);
+        if (recipients.length === 0) {
           this.logger.warn(
-            `Продавец ${order.sellerId} не привязал Telegram — заказ #${order.orderNumber} только в админке.`,
+            `Никто из команды продавца ${order.sellerId} не привязал Telegram — заказ #${order.orderNumber} только в админке.`,
           );
           continue;
         }
         const { text, keyboard } = this.buildSellerCard(order);
-        await this.telegram.sendToSeller(
-          staffTelegramId,
-          `🆕 <b>Новый заказ!</b>\n\n${text}`,
-          keyboard,
-        );
-        if (order.deliveryLat != null && order.deliveryLng != null) {
-          await this.telegram.sendLocationToSeller(
+        await this.fanOut(recipients, async (staffTelegramId) => {
+          await this.telegram.sendToSeller(
             staffTelegramId,
-            order.deliveryLat,
-            order.deliveryLng,
+            `🆕 <b>Новый заказ!</b>\n\n${text}`,
+            keyboard,
           );
-        }
+          if (order.deliveryLat != null && order.deliveryLng != null) {
+            await this.telegram.sendLocationToSeller(
+              staffTelegramId,
+              order.deliveryLat,
+              order.deliveryLng,
+            );
+          }
+        });
       } catch (error) {
         this.logger.error(
           `Уведомление о заказе #${order.orderNumber} не ушло: ${(error as Error).message}`,
@@ -147,16 +149,17 @@ export class OrderNotifier {
     }
   }
 
-  /** Покупатель отменил сам → сообщаем продавцу, чтобы тот не собирал зря. */
+  /** Покупатель отменил сам → сообщаем команде, чтобы никто не собирал зря. */
   async cancelledByCustomer(order: OrderWithDetails): Promise<void> {
     try {
-      const staffTelegramId = await this.sellerTelegramId(order.sellerId);
-      await this.telegram.sendToSeller(
-        staffTelegramId,
+      const recipients = await this.sellerTelegramIds(order.sellerId);
+      const text =
         `❌ Покупатель отменил заказ <b>#${order.orderNumber}</b>.` +
-          (order.cancelReason
-            ? `\nПричина: ${escapeHtml(order.cancelReason)}`
-            : ''),
+        (order.cancelReason
+          ? `\nПричина: ${escapeHtml(order.cancelReason)}`
+          : '');
+      await this.fanOut(recipients, (staffTelegramId) =>
+        this.telegram.sendToSeller(staffTelegramId, text),
       );
     } catch (error) {
       this.logger.error(
@@ -165,13 +168,41 @@ export class OrderNotifier {
     }
   }
 
-  /** Адрес продавца — в боте ПРОДАВЦА, поэтому staffTelegramId, а не telegramId. */
-  private async sellerTelegramId(sellerId: string): Promise<string | null> {
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-      select: { owner: { select: { staffTelegramId: true } } },
+  /**
+   * Адреса всей команды продавца: и владелец, и сотрудники (`User.sellerId`).
+   * Адрес рабочий, поэтому staffTelegramId, а не telegramId — уведомления живут
+   * в боте ПРОДАВЦА. Непривязанные (staffTelegramId = null) отсеиваются здесь.
+   */
+  private async sellerTelegramIds(sellerId: string): Promise<string[]> {
+    const staff = await this.prisma.user.findMany({
+      where: {
+        staffTelegramId: { not: null },
+        // Владелец подстрахован отдельной веткой: у него sellerId в теории может
+        // быть пустым (SetNull), а уведомление ему нужно в любом случае.
+        OR: [{ sellerId }, { ownedSeller: { is: { id: sellerId } } }],
+      },
+      select: { staffTelegramId: true },
     });
-    return seller?.owner.staffTelegramId ?? null;
+    return staff.map((s) => s.staffTelegramId as string);
+  }
+
+  /**
+   * Рассылка по команде: недоступный Telegram одного сотрудника не должен лишать
+   * уведомления остальных, поэтому try/catch на КАЖДОГО адресата, а не на заказ.
+   */
+  private async fanOut(
+    recipients: string[],
+    send: (staffTelegramId: string) => Promise<void>,
+  ): Promise<void> {
+    for (const staffTelegramId of recipients) {
+      try {
+        await send(staffTelegramId);
+      } catch (error) {
+        this.logger.error(
+          `Не доставлено staffTelegramId=${staffTelegramId}: ${(error as Error).message}`,
+        );
+      }
+    }
   }
 
   private async customerTelegramId(userId: string): Promise<string | null> {

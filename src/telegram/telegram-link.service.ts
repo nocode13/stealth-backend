@@ -1,14 +1,8 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  Logger,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BotSessionPurpose, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { TELEGRAM_TAKEN_BY_STAFF } from '../common/telegram-identity';
 
 /** Исход привязки: под каждый — свой текст в чате, см. telegram-identity.ts. */
 export type LinkSellerResult = 'ok' | 'expired' | 'takenByStaff';
@@ -32,6 +26,10 @@ const PREFIX: Record<BotSessionPurpose, string> = {
  * Механика та же, что у входа (TelegramAuthService): nonce в диплинке + поллинг.
  * Отличие в том, что userId известен заранее, а не создаётся ботом, — поэтому
  * это отдельная модель BotLinkSession, а не переиспользование TelegramAuthSession.
+ *
+ * Именно потому, что userId — параметр, а не «текущий пользователь», сессию можно
+ * выписать и на чужой аккаунт: так владелец приглашает сотрудника в команду
+ * (SellerStaffService.invite), и тому не нужен вход в админку.
  */
 @Injectable()
 export class TelegramLinkService {
@@ -127,19 +125,6 @@ export class TelegramLinkService {
       where: { id: userId },
       data: { staffTelegramId: null },
     });
-  }
-
-  /** Кидает 409, если этот Telegram уже ведёт другой рабочий аккаунт. */
-  async assertTelegramFree(
-    staffTelegramId: string,
-    userId: string,
-  ): Promise<void> {
-    const owner = await this.prisma.user.findUnique({
-      where: { staffTelegramId },
-    });
-    if (owner && owner.id !== userId) {
-      throw new ConflictException(TELEGRAM_TAKEN_BY_STAFF);
-    }
   }
 
   private async findLive(nonce: string, purpose: BotSessionPurpose) {

@@ -23,19 +23,25 @@ export class UsersService {
     return this.prisma.user.findUnique({ where: { id } });
   }
 
-  // Создание пользователя с паролем (phone обязателен — якорь личности).
+  // Заведение рабочего аккаунта из админки (сотрудник продавца).
+  // Пароль опционален: без него в админку не войти (verifyPassword вернёт false),
+  // но кабинет в боте продавца работает — это валидный сценарий «только бот».
   async create(data: {
-    phone: string;
+    phone?: string;
     email?: string;
-    password: string;
+    name?: string;
+    password?: string;
     role?: Role;
     sellerId?: string;
   }): Promise<User> {
-    const passwordHash = await bcrypt.hash(data.password, 10);
+    const passwordHash = data.password
+      ? await bcrypt.hash(data.password, 10)
+      : null;
     return this.prisma.user.create({
       data: {
         phone: data.phone,
         email: data.email,
+        name: data.name,
         passwordHash,
         role: data.role ?? Role.CUSTOMER,
         sellerId: data.sellerId,

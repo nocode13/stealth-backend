@@ -7,22 +7,22 @@ import { SellerComposer } from './handlers/seller.composer';
 import { PhoneAuthService } from './phone-auth.service';
 import { TelegramAuthService } from './telegram-auth.service';
 import { TelegramBotService } from './telegram-bot.service';
-import { TelegramLinkService } from './telegram-link.service';
+import { TelegramLinkModule } from './telegram-link.module';
 import { TelegramWebhookController } from './telegram-webhook.controller';
 
 // Входящая часть Telegram: бот, хендлеры покупателя и кабинет продавца.
-// Исходящие сообщения — в TelegramNotifyModule (без него был бы цикл с OrdersModule).
+// Исходящие сообщения — в TelegramNotifyModule, привязка рабочего аккаунта — в
+// TelegramLinkModule (оба вынесены, чтобы не было цикла с OrdersModule/SellersModule).
 @Module({
-  imports: [AuthModule, UsersModule, OrdersModule],
+  imports: [AuthModule, UsersModule, OrdersModule, TelegramLinkModule],
   controllers: [TelegramWebhookController],
   providers: [
     TelegramAuthService,
     PhoneAuthService,
-    TelegramLinkService,
     TelegramBotService,
     SellerComposer,
     CustomerComposer,
   ],
-  exports: [TelegramAuthService, PhoneAuthService, TelegramLinkService],
+  exports: [TelegramAuthService, PhoneAuthService, TelegramLinkModule],
 })
 export class TelegramModule {}

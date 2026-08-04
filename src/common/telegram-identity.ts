@@ -1,5 +1,3 @@
-import { Role } from '@prisma/client';
-
 /**
  * Покупатель и staff — разные учётки, даже если Telegram один.
  *
@@ -13,10 +11,9 @@ import { Role } from '@prisma/client';
  * в учётку продавца. С разделением ботов запрет снят и не нужен.
  *
  * Единственный оставшийся инвариант: один Telegram = максимум один покупатель и
- * максимум один staff-аккаунт (обе колонки unique).
+ * максимум один staff-аккаунт (обе колонки unique). Сотрудников у продавца при
+ * этом может быть сколько угодно — но каждому нужен свой Telegram.
  */
-export const isStaffRole = (role: Role): boolean =>
-  role === Role.SELLER || role === Role.SUPER_ADMIN;
 
 /** Этот Telegram уже ведёт другой магазин/админский аккаунт. */
 export const TELEGRAM_TAKEN_BY_STAFF =
