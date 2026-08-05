@@ -5,11 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma, Role, User } from '@prisma/client';
+import { OrderStatus, Prisma, Role, User } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone } from '../common/phone';
 import { isTestAccount } from '../common/test-account';
+import { isTerminal } from '../orders/order-status';
 
 @Injectable()
 export class UsersService {
@@ -18,18 +19,26 @@ export class UsersService {
     private readonly config: ConfigService,
   ) {}
 
+  // Поиск по «личностным» колонкам идёт через findFirst с `deletedAt: null`, а не
+  // findUnique: удалённый аккаунт свои phone/email/telegramId обнуляет, но если
+  // когда-нибудь останется хвост, вход по нему не должен воскресить учётку —
+  // повторная регистрация обязана создать новую (см. deleteAccount).
   findByEmail(email: string): Promise<User | null> {
-    return this.prisma.user.findUnique({ where: { email } });
+    return this.prisma.user.findFirst({ where: { email, deletedAt: null } });
   }
 
   findByPhone(phone: string): Promise<User | null> {
-    return this.prisma.user.findUnique({ where: { phone } });
+    return this.prisma.user.findFirst({ where: { phone, deletedAt: null } });
   }
 
   findByTelegramId(telegramId: string): Promise<User | null> {
-    return this.prisma.user.findUnique({ where: { telegramId } });
+    return this.prisma.user.findFirst({
+      where: { telegramId, deletedAt: null },
+    });
   }
 
+  // По id — без фильтра: id приходит из уже выпущенного токена, и вызывающему
+  // (JwtStrategy) нужно отличить «нет такого» от «аккаунт удалён».
   findById(id: string): Promise<User | null> {
     return this.prisma.user.findUnique({ where: { id } });
   }
@@ -159,6 +168,81 @@ export class UsersService {
       }
       throw e;
     }
+  }
+
+  // Удаление аккаунта покупателя (требование Google Play: приложение с регистрацией
+  // обязано уметь удалять учётку изнутри).
+  //
+  // Строку users НЕ удаляем: Order.userId стоит onDelete: Restrict, и это намеренно —
+  // заказы обязаны пережить уход покупателя ради отчётности продавца. Вместо этого
+  // затираем персональный снапшот в заказах и обнуляем профиль. phone/email/telegramId
+  // nullable+unique, поэтому обнуление освобождает их: вход по тому же номеру заведёт
+  // НОВУЮ учётку (findByPhone фильтрует по deletedAt: null).
+  //
+  // Активные заказы блокируют удаление: без телефона и адреса курьер не доедет.
+  async deleteAccount(userId: string): Promise<void> {
+    const user = await this.findById(userId);
+    if (!user) throw new NotFoundException('Пользователь не найден');
+    if (user.deletedAt) return; // идемпотентно: повтор не ошибка
+    if (isTestAccount(user.phone, this.config)) {
+      throw new ForbiddenException('Тестовый аккаунт нельзя удалить');
+    }
+
+    // Список нетерминальных статусов выводим из ALLOWED_TRANSITIONS, а не
+    // перечисляем руками — AGENTS.md запрещает вторую копию карты переходов.
+    const activeStatuses = Object.values(OrderStatus).filter(
+      (s) => !isTerminal(s),
+    );
+    const active = await this.prisma.order.count({
+      where: { userId, status: { in: activeStatuses } },
+    });
+    if (active > 0) {
+      throw new ConflictException(
+        'Сначала завершите или отмените активные заказы',
+      );
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.savedAddress.deleteMany({ where: { userId } }),
+      this.prisma.cartItem.deleteMany({ where: { userId } }),
+      this.prisma.notification.deleteMany({ where: { userId } }),
+      this.prisma.refreshToken.deleteMany({ where: { userId } }),
+      this.prisma.pushToken.deleteMany({ where: { userId } }),
+      // Незавершённые сессии входа: в них лежит телефон/telegramId, и живая
+      // сессия после удаления восстановила бы привязку к этой же строке.
+      this.prisma.telegramAuthSession.deleteMany({ where: { userId } }),
+      this.prisma.botLinkSession.deleteMany({ where: { userId } }),
+      this.prisma.phoneAuthSession.deleteMany({
+        where: user.phone
+          ? { OR: [{ userId }, { phone: user.phone }] }
+          : { userId },
+      }),
+      // Заказы остаются, но обезличенными: суммы и позиции нужны для отчётности,
+      // контакты и точка на карте — уже нет.
+      this.prisma.order.updateMany({
+        where: { userId },
+        data: {
+          contactName: 'Удалённый пользователь',
+          contactPhone: '',
+          deliveryAddress: '',
+          deliveryComment: null,
+          deliveryLat: null,
+          deliveryLng: null,
+        },
+      }),
+      this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          telegramId: null,
+          staffTelegramId: null,
+          phone: null,
+          email: null,
+          name: null,
+          passwordHash: null,
+          deletedAt: new Date(),
+        },
+      }),
+    ]);
   }
 
   verifyPassword(user: User, password: string): Promise<boolean> {

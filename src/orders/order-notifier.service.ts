@@ -4,6 +4,7 @@ import { InlineKeyboard } from 'grammy';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramNotifyService } from '../telegram/telegram-notify.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PushService } from '../push/push.service';
 import type { OrderWithDetails } from './orders.service';
 import {
   ALLOWED_TRANSITIONS,
@@ -34,6 +35,7 @@ export class OrderNotifier {
     private readonly prisma: PrismaService,
     private readonly telegram: TelegramNotifyService,
     private readonly notifications: NotificationsService,
+    private readonly push: PushService,
     private readonly config: ConfigService,
   ) {}
 
@@ -115,16 +117,22 @@ export class OrderNotifier {
   }
 
   /**
-   * Статус поменял продавец → сообщаем покупателю по двум каналам.
+   * Статус поменял продавец → сообщаем покупателю.
    *
    * 1. Лента в БД — её читает мобилка поллингом. Обязательный канал: мобилка
    *    работает как Telegram Mini App, и сообщение бота приходит в чат ПОД ней,
    *    поэтому юзер, не сворачивая приложение, его не увидит.
-   * 2. Telegram-сообщение — для тех, кто сейчас не в приложении.
+   * 2. Push — если у юзера есть хоть одна установка нативного приложения.
+   * 3. Telegram-сообщение — ИНАЧЕ, для тех, у кого нативки нет (Mini App, веб).
    *
-   * Запись в ленту идёт ПЕРВОЙ и её ошибка не глотается: в отличие от чужого
-   * Telegram, локальный insert в Postgres обязан быть надёжным. Telegram, как и
-   * раньше, «мягкий» — падение внешнего сервиса не должно ронять смену статуса.
+   * Пункты 2 и 3 взаимоисключающие намеренно: с пушем Telegram-DM был бы вторым
+   * уведомлением об одном событии. Мёртвые токены вычищает PushService по
+   * receipts, так что «есть токен» означает живую установку, а не след от
+   * удалённого приложения.
+   *
+   * Запись в ленту идёт ПЕРВОЙ и её ошибка не глотается: в отличие от чужих
+   * Expo/Telegram, локальный insert в Postgres обязан быть надёжным. Внешние
+   * каналы «мягкие» — падение сервиса не должно ронять смену статуса.
    */
   async statusChanged(order: OrderWithDetails): Promise<void> {
     const message = CUSTOMER_STATUS_MESSAGES[order.status];
@@ -137,6 +145,18 @@ export class OrderNotifier {
     });
 
     try {
+      const pushed = await this.push.sendToUser(order.userId, {
+        title: `Заказ #${order.orderNumber}`,
+        body: message,
+        // Тот же payload, что в ленте, — по нему тап открывает нужный экран.
+        data: {
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+        },
+      });
+      if (pushed) return;
+
       const telegramId = await this.customerTelegramId(order.userId);
       await this.telegram.sendToCustomer(
         telegramId,

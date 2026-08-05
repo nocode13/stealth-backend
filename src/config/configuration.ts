@@ -60,6 +60,11 @@ export const envValidationSchema = Joi.object({
   // (тот же приём, что с TELEGRAM_BOT_TOKEN).
   REDIS_URL: Joi.string().allow('').optional(),
   CACHE_TTL_SECONDS: Joi.number().default(60),
+
+  // Push-уведомления через Expo Push Service. Токен доступа нужен только если в
+  // кабинете Expo включена «Enhanced Security for Push Notifications»; без него
+  // отправка тоже работает. Пусто = как у TELEGRAM_BOT_TOKEN, просто без токена.
+  EXPO_ACCESS_TOKEN: Joi.string().allow('').optional(),
 });
 
 // Типизированный доступ к конфигу через ConfigService.
@@ -121,5 +126,8 @@ export default () => ({
   cache: {
     url: process.env.REDIS_URL,
     ttlSeconds: parseInt(process.env.CACHE_TTL_SECONDS ?? '60', 10),
+  },
+  push: {
+    expoAccessToken: process.env.EXPO_ACCESS_TOKEN,
   },
 });

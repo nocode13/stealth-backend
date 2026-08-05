@@ -10,6 +10,7 @@ import { OrdersModule } from '../orders/orders.module';
 import { SellersModule } from '../sellers/sellers.module';
 import { AddressesModule } from '../addresses/addresses.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { PushModule } from '../push/push.module';
 import { MobileAuthController } from './mobile-auth.controller';
 import { MobileCategoriesController } from './mobile-categories.controller';
 import { MobileCatalogController } from './mobile-catalog.controller';
@@ -34,6 +35,7 @@ import { MobileNotificationsController } from './mobile-notifications.controller
     SellersModule,
     AddressesModule,
     NotificationsModule,
+    PushModule,
   ],
   controllers: [
     MobileAuthController,
