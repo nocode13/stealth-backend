@@ -77,37 +77,45 @@ enum BotSessionPurpose {
 }
 
 model User {
-  id           String   @id @default(cuid())
+  id              String         @id @default(cuid())
   // telegramId — якорь личности покупателя: адрес в ОСНОВНОМ боте и вход в мобилку.
-  telegramId   String?  @unique
+  telegramId      String?        @unique
   // staffTelegramId — адрес кабинета в боте ПРОДАВЦА. Колонки разные намеренно:
   // у продавца и покупателя может быть один и тот же Telegram, это две разные
   // учётки, и каждый бот ищет своего юзера по своей колонке.
-  staffTelegramId String? @unique
+  staffTelegramId String?        @unique
   // phone/email/name — опциональные профильные поля, юзер дозаполняет их сам.
   // В профиле они так и остаются опциональными, но checkout требует телефон и имя:
   // они уходят в снапшот заказа (Order.contactPhone/contactName), а телефон,
   // если его ещё не было, дописывается сюда.
-  phone        String?  @unique
-  email        String?  @unique
-  name         String?
+  phone           String?        @unique
+  email           String?        @unique
+  name            String?
   // passwordHash опционален: он есть только у админов (вход по паролю в админку).
-  passwordHash String?
-  role         Role     @default(CUSTOMER)
+  passwordHash    String?
+  role            Role           @default(CUSTOMER)
   // Продавец, к которому привязан пользователь (для роли SELLER). Их может быть
   // несколько на одного продавца — это команда (Seller.members), и уведомления о
   // заказах уходят всем её участникам с привязанным staffTelegramId.
-  sellerId     String?
-  seller       Seller?  @relation("SellerMembers", fields: [sellerId], references: [id], onDelete: SetNull)
+  sellerId        String?
+  seller          Seller?        @relation("SellerMembers", fields: [sellerId], references: [id], onDelete: SetNull)
   // Продавец, которым владеет пользователь (owner). Обратная сторона Seller.owner.
-  ownedSeller  Seller?  @relation("SellerOwner")
-  refreshTokens RefreshToken[]
-  cartItems    CartItem[]
-  orders       Order[]
-  savedAddresses SavedAddress[]
-  notifications Notification[]
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  ownedSeller     Seller?        @relation("SellerOwner")
+  refreshTokens   RefreshToken[]
+  cartItems       CartItem[]
+  orders          Order[]
+  savedAddresses  SavedAddress[]
+  notifications   Notification[]
+  pushTokens      PushToken[]
+  // deletedAt — юзер удалил аккаунт из мобилки. Строку не удаляем: Order.userId
+  // стоит Restrict, а заказы обязаны пережить удаление ради отчётности (их
+  // персональный снапшот при этом затирается). Всё остальное — профиль, адреса,
+  // корзина, уведомления, push-токены, сессии — чистится по-настоящему.
+  // Заполненный deletedAt = вход запрещён, а телефон/email/telegramId обнулены,
+  // так что повторная регистрация создаст НОВУЮ учётку.
+  deletedAt       DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
   @@index([createdAt])
   // Команда продавца: список сотрудников в админке и веер уведомлений о заказах.
@@ -178,33 +186,33 @@ model BotLinkSession {
 
 // Хранит хэш активного refresh-токена мобильной сессии (ротация при обновлении).
 model RefreshToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   tokenHash String // sha256 от refresh-токена
   expiresAt DateTime
   revokedAt DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([userId])
   @@map("refresh_tokens")
 }
 
 model Seller {
-  id          String       @id @default(cuid())
-  name        String
-  description String?
-  bannerUrl   String?
-  status      SellerStatus @default(ACTIVE)
-  ownerUserId String       @unique
-  owner       User         @relation("SellerOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
-  members     User[]       @relation("SellerMembers")
-  listings    Listing[]
-  categories    Category[]
-  catalogItems  CatalogItem[]
-  orders        Order[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id           String        @id @default(cuid())
+  name         String
+  description  String?
+  bannerUrl    String?
+  status       SellerStatus  @default(ACTIVE)
+  ownerUserId  String        @unique
+  owner        User          @relation("SellerOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  members      User[]        @relation("SellerMembers")
+  listings     Listing[]
+  categories   Category[]
+  catalogItems CatalogItem[]
+  orders       Order[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
   @@index([createdAt])
   @@index([status])
@@ -215,17 +223,17 @@ model Seller {
 // и кастомные, предложенные продавцом (sellerId заполнен, уходят в PENDING до апрува
 // SUPER_ADMIN'ом и видны/доступны для использования только этому продавцу).
 model Category {
-  id           String       @id @default(cuid())
+  id           String        @id @default(cuid())
   nameRu       String
   nameUz       String?
   nameEn       String?
   nameKaa      String?
   sellerId     String?
-  seller       Seller?      @relation(fields: [sellerId], references: [id], onDelete: Cascade)
-  status       ReviewStatus @default(APPROVED)
+  seller       Seller?       @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  status       ReviewStatus  @default(APPROVED)
   catalogItems CatalogItem[]
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
   @@index([sellerId])
   @@index([status])
@@ -236,21 +244,21 @@ model Category {
 // Справочник цветов — master-список (sellerId = null, создаёт SUPER_ADMIN) плюс
 // кастомные позиции, предложенные продавцом (тот же паттерн ревью, что и Category).
 model CatalogItem {
-  id          String       @id @default(cuid())
+  id          String             @id @default(cuid())
   name        String
   // Категория необязательна: позицию можно завести до того, как категория придумана
   // или одобрена, и снять её позже (PATCH с categoryId: null).
   categoryId  String?
-  category    Category?    @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  category    Category?          @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   description String?
   images      CatalogItemImage[]
-  unit        String       @default("шт") // единица измерения: шт, букет, упаковка...
+  unit        String             @default("шт") // единица измерения: шт, букет, упаковка...
   sellerId    String?
-  seller      Seller?      @relation(fields: [sellerId], references: [id], onDelete: Cascade)
-  status      ReviewStatus @default(APPROVED)
+  seller      Seller?            @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  status      ReviewStatus       @default(APPROVED)
   listings    Listing[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
 
   @@index([sellerId])
   @@index([status])
@@ -286,8 +294,8 @@ model Listing {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  cartItems     CartItem[]
-  orderItems    OrderItem[]
+  cartItems  CartItem[]
+  orderItems OrderItem[]
 
   @@unique([sellerId, catalogItemId])
   @@index([status])
@@ -321,11 +329,11 @@ model CartItem {
 // Все деньги и контакты — снапшот на момент оформления: цена листинга и профиль
 // пользователя меняются, а заказ обязан остаться читаемым как есть.
 model Order {
-  id       String @id @default(cuid())
+  id          String @id @default(cuid())
   // Общий ключ заказов одного оформления (несколько продавцов = несколько Order).
-  groupId  String
+  groupId     String
   // Человекочитаемый номер для поддержки и для поиска в боте.
-  orderNumber Int @unique @default(autoincrement())
+  orderNumber Int    @unique @default(autoincrement())
 
   userId   String
   user     User   @relation(fields: [userId], references: [id], onDelete: Restrict)
@@ -477,4 +485,30 @@ model Notification {
   // Покрывает и поллинг (userId + seq > cursor), и подсчёт непрочитанных.
   @@index([userId, seq])
   @@map("notifications")
+}
+
+// Push-токен Expo (ExponentPushToken[...]) конкретной установки приложения.
+// Второй канал доставки поверх той же ленты Notification: она остаётся источником
+// правды (и единственным каналом в Mini App/вебе, где пушей нет), push лишь
+// достаёт юзера, когда приложение закрыто.
+model PushToken {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // unique по самому токену, а не по паре (userId, token): токен принадлежит
+  // УСТАНОВКЕ, а не человеку. Если на одном устройстве вошёл другой юзер, строка
+  // должна переехать к нему (upsert перезаписывает userId), иначе пуши продолжат
+  // уходить предыдущему владельцу аккаунта.
+  token    String @unique
+  platform String // 'android' | 'ios'
+
+  // Обновляется при каждой перерегистрации — по нему видно мёртвые установки,
+  // если их не успел вычистить DeviceNotRegistered из receipts.
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@map("push_tokens")
 }

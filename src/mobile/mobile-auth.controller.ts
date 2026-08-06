@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -129,6 +130,21 @@ export class MobileAuthController {
   ) {
     const user = await this.users.updateProfile(userId, dto);
     return this.auth.toAuthUser(user);
+  }
+
+  @Delete('me')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Удалить аккаунт',
+    description:
+      'Профиль, адреса, корзина, уведомления, push-токены и сессии удаляются; ' +
+      'заказы остаются обезличенными (отчётность продавца). Активные заказы ' +
+      'блокируют удаление → 409. Тестовому аккаунту Play Store → 403.',
+  })
+  async deleteMe(@CurrentUser('id') userId: string) {
+    await this.users.deleteAccount(userId);
   }
 
   @Post('logout')
