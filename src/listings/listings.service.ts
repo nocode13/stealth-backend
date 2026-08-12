@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Listing, ListingStatus, Prisma } from '@prisma/client';
+import { Listing, ListingStatus, MediaStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CatalogService } from '../catalog/catalog.service';
@@ -15,9 +15,20 @@ import {
   UpdateListingDto,
 } from './dto/listing.dto';
 
+// Витрина листингов ходит в каталог мимо CatalogService, поэтому фильтр «только
+// готовые медиа» повторяется здесь (см. withCategoryPublic): недотранскоденное
+// и упавшее видео покупателю показывать нельзя. Админский список листингов идёт
+// через тот же include — там медиа только для превью, а редактируется галерея
+// всё равно в каталоге.
 const withCatalog = {
   catalogItem: {
-    include: { category: true, images: { orderBy: { sortOrder: 'asc' } } },
+    include: {
+      category: true,
+      media: {
+        where: { status: MediaStatus.READY },
+        orderBy: { sortOrder: 'asc' },
+      },
+    },
   },
   seller: { select: { id: true, name: true } },
 } satisfies Prisma.ListingInclude;

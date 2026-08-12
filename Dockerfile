@@ -1,5 +1,7 @@
 FROM node:22-slim AS base
-RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+# ffmpeg нужен в runtime: VideoService зовёт ffmpeg/ffprobe как внешние бинарники
+# (транскод видео в mp4 и кадр для обложки), npm-обёртки для этого не используются.
+RUN apt-get update -y && apt-get install -y openssl ffmpeg && rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 WORKDIR /app
 

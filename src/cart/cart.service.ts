@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ListingStatus, Prisma } from '@prisma/client';
+import { ListingStatus, MediaStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 
@@ -12,7 +12,14 @@ const withListing = {
   listing: {
     include: {
       catalogItem: {
-        include: { category: true, images: { orderBy: { sortOrder: 'asc' } } },
+        include: {
+          category: true,
+          // Корзина — экран покупателя, необработанное видео туда не попадает.
+          media: {
+            where: { status: MediaStatus.READY },
+            orderBy: { sortOrder: 'asc' },
+          },
+        },
       },
     },
   },

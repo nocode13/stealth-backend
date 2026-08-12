@@ -5,7 +5,14 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { ListingStatus, OrderStatus, Prisma, Role } from '@prisma/client';
+import {
+  ListingStatus,
+  MediaStatus,
+  MediaType,
+  OrderStatus,
+  Prisma,
+  Role,
+} from '@prisma/client';
 import { randomUUID } from 'crypto';
 import type { AuthPrincipal } from '../common/decorators/current-user.decorator';
 import { CursorPage, toCursorPage } from '../common/pagination';
@@ -33,6 +40,17 @@ const withDetails = {
 export type OrderWithDetails = Prisma.OrderGetPayload<{
   include: typeof withDetails;
 }>;
+
+// Обложка для снапшота позиции заказа. В галерее первым может стоять видео, а в
+// карточке заказа (админка, бот, история покупателя) нужна картинка — берём первое
+// фото, иначе обложку первого видео.
+function coverUrl(
+  media: { type: MediaType; url: string; posterUrl: string | null }[],
+): string | null {
+  const image = media.find((m) => m.type === MediaType.IMAGE);
+  if (image) return image.url;
+  return media.find((m) => m.posterUrl)?.posterUrl ?? null;
+}
 
 @Injectable()
 export class OrdersService {
@@ -62,7 +80,14 @@ export class OrdersService {
         listing: {
           include: {
             catalogItem: {
-              include: { images: { orderBy: { sortOrder: 'asc' }, take: 1 } },
+              // Вся готовая галерея, а не take: 1 — в снапшот заказа нужна
+              // картинка, а первым медиа может оказаться видео (см. coverUrl).
+              include: {
+                media: {
+                  where: { status: MediaStatus.READY },
+                  orderBy: { sortOrder: 'asc' },
+                },
+              },
             },
           },
         },
@@ -151,8 +176,7 @@ export class OrdersService {
               create: items.map((item) => ({
                 listingId: item.listingId,
                 catalogItemName: item.listing.catalogItem.name,
-                catalogItemImageUrl:
-                  item.listing.catalogItem.images[0]?.url ?? null,
+                catalogItemImageUrl: coverUrl(item.listing.catalogItem.media),
                 unit: item.listing.catalogItem.unit,
                 price: item.listing.price,
                 quantity: item.quantity,
