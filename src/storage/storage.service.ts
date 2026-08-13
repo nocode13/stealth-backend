@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -51,6 +52,16 @@ export class StorageService {
   keyFromUrl(url: string): string | null {
     const prefix = `${this.publicUrl}/`;
     return url.startsWith(prefix) ? url.slice(prefix.length) : null;
+  }
+
+  // Нужна воркеру транскода: оригинал видео лежит в бакете, а не в памяти
+  // процесса, поэтому после рестарта недоделанную работу можно подобрать заново.
+  async download(key: string): Promise<Buffer> {
+    const result = await this.client.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
+    const bytes = await result.Body!.transformToByteArray();
+    return Buffer.from(bytes);
   }
 
   async delete(key: string): Promise<void> {

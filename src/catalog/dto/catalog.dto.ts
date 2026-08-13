@@ -93,7 +93,7 @@ export class FindCatalogQueryDto extends CursorPaginationDto {
   sellerId?: string;
 }
 
-export class ReorderCatalogImageDto {
+export class ReorderCatalogMediaDto {
   @ApiProperty({ enum: ['up', 'down'] })
   @IsIn(['up', 'down'])
   direction: 'up' | 'down';

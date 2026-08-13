@@ -4,7 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, ReviewStatus, Role } from '@prisma/client';
+import { MediaStatus, MediaType, Prisma, ReviewStatus, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
@@ -17,11 +17,24 @@ import {
   UpdateCatalogItemDto,
 } from './dto/catalog.dto';
 
-const MAX_IMAGES_PER_ITEM = 10;
+const MAX_MEDIA_PER_ITEM = 10;
 
+// Админский include: медиа целиком, вместе с PROCESSING и FAILED — админка обязана
+// показывать, что видео ещё обрабатывается или не обработалось.
 const withCategory = {
   category: true,
-  images: { orderBy: { sortOrder: 'asc' } },
+  media: { orderBy: { sortOrder: 'asc' } },
+} satisfies Prisma.CatalogItemInclude;
+
+// Публичный include: недоделанное и упавшее видео на витрину не пускаем. Тот же
+// фильтр повторяет ListingsService.withCatalog — витрина листингов ходит мимо
+// CatalogService.
+export const withCategoryPublic = {
+  category: true,
+  media: {
+    where: { status: MediaStatus.READY },
+    orderBy: { sortOrder: 'asc' },
+  },
 } satisfies Prisma.CatalogItemInclude;
 
 export type CatalogItem = Prisma.CatalogItemGetPayload<{
@@ -50,7 +63,7 @@ export class CatalogService {
             : undefined,
           categoryId: query.noCategory ? null : query.categoryId,
         },
-        include: withCategory,
+        include: withCategoryPublic,
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
         cursor: query.cursor ? { id: query.cursor } : undefined,
         skip: query.cursor ? 1 : 0,
@@ -164,70 +177,75 @@ export class CatalogService {
     return item;
   }
 
-  async addImage(
+  // Фото приходит уже готовым (webp), видео — ссылкой на оригинал со статусом
+  // PROCESSING: mp4 и обложку дорисует MediaProcessingService.
+  async addMedia(
     id: string,
-    url: string,
+    data: { url: string; type: MediaType; status: MediaStatus },
     user: AuthUser,
-  ): Promise<CatalogItem> {
+  ): Promise<{ item: CatalogItem; mediaId: string }> {
     const item = await this.assertOwned(id, user);
-    if (item.images.length >= MAX_IMAGES_PER_ITEM) {
+    if (item.media.length >= MAX_MEDIA_PER_ITEM) {
       throw new ForbiddenException(
-        `Не больше ${MAX_IMAGES_PER_ITEM} фото на позицию`,
+        `Не больше ${MAX_MEDIA_PER_ITEM} медиафайлов на позицию`,
       );
     }
-    const nextSortOrder = item.images.length
-      ? Math.max(...item.images.map((i) => i.sortOrder)) + 1
+    const nextSortOrder = item.media.length
+      ? Math.max(...item.media.map((m) => m.sortOrder)) + 1
       : 0;
-    await this.prisma.catalogItemImage.create({
-      data: { catalogItemId: id, url, sortOrder: nextSortOrder },
+    const created = await this.prisma.catalogItemMedia.create({
+      data: { catalogItemId: id, ...data, sortOrder: nextSortOrder },
     });
     await this.cache.bump();
-    return this.findOne(id);
+    return { item: await this.findOne(id), mediaId: created.id };
   }
 
-  async removeImage(
+  async removeMedia(
     id: string,
-    imageId: string,
+    mediaId: string,
     user: AuthUser,
   ): Promise<CatalogItem> {
     const item = await this.assertOwned(id, user);
-    const image = item.images.find((i) => i.id === imageId);
-    if (!image) throw new NotFoundException('Фото не найдено');
+    const media = item.media.find((m) => m.id === mediaId);
+    if (!media) throw new NotFoundException('Медиафайл не найден');
 
-    const oldKey = this.storage.keyFromUrl(image.url);
-    if (oldKey) {
+    // У видео объектов в бакете два: сам файл и обложка (у PROCESSING в url лежит
+    // ещё не обработанный оригинал — его тоже надо убрать).
+    for (const url of [media.url, media.posterUrl]) {
+      const oldKey = url ? this.storage.keyFromUrl(url) : null;
+      if (!oldKey) continue;
       this.storage.delete(oldKey).catch((e: unknown) => {
-        this.logger.warn(`Не удалось удалить фото ${oldKey}`, e);
+        this.logger.warn(`Не удалось удалить объект ${oldKey}`, e);
       });
     }
 
-    await this.prisma.catalogItemImage.delete({ where: { id: imageId } });
+    await this.prisma.catalogItemMedia.delete({ where: { id: mediaId } });
     await this.cache.bump();
     return this.findOne(id);
   }
 
-  async reorderImage(
+  async reorderMedia(
     id: string,
-    imageId: string,
+    mediaId: string,
     direction: 'up' | 'down',
     user: AuthUser,
   ): Promise<CatalogItem> {
     const item = await this.assertOwned(id, user);
-    const images = item.images; // уже отсортированы по sortOrder
-    const index = images.findIndex((i) => i.id === imageId);
-    if (index === -1) throw new NotFoundException('Фото не найдено');
+    const media = item.media; // уже отсортированы по sortOrder
+    const index = media.findIndex((m) => m.id === mediaId);
+    if (index === -1) throw new NotFoundException('Медиафайл не найден');
 
     const swapWith = direction === 'up' ? index - 1 : index + 1;
-    if (swapWith < 0 || swapWith >= images.length) return item;
+    if (swapWith < 0 || swapWith >= media.length) return item;
 
-    const a = images[index];
-    const b = images[swapWith];
+    const a = media[index];
+    const b = media[swapWith];
     await this.prisma.$transaction([
-      this.prisma.catalogItemImage.update({
+      this.prisma.catalogItemMedia.update({
         where: { id: a.id },
         data: { sortOrder: b.sortOrder },
       }),
-      this.prisma.catalogItemImage.update({
+      this.prisma.catalogItemMedia.update({
         where: { id: b.id },
         data: { sortOrder: a.sortOrder },
       }),

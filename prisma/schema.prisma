@@ -36,6 +36,22 @@ enum ReviewStatus {
   REJECTED
 }
 
+// Фото и видео позиции каталога лежат в ОДНОЙ таблице (catalog_item_media) и
+// различаются только этим полем: галерея у них общая, порядок сквозной.
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+// PROCESSING бывает только у видео: строка появляется сразу после загрузки, а mp4
+// и обложка досоздаются фоновым воркером (MediaProcessingService). Фото готовы
+// сразу, поэтому дефолт — READY.
+enum MediaStatus {
+  PROCESSING
+  READY
+  FAILED
+}
+
 // Жизненный цикл заказа. Переходы валидируются в OrdersService.ALLOWED_TRANSITIONS —
 // эта же карта строит кнопки в кабинете продавца в боте, чтобы список не разъезжался.
 enum OrderStatus {
@@ -251,7 +267,7 @@ model CatalogItem {
   categoryId  String?
   category    Category?          @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   description String?
-  images      CatalogItemImage[]
+  media       CatalogItemMedia[]
   unit        String             @default("шт") // единица измерения: шт, букет, упаковка...
   sellerId    String?
   seller      Seller?            @relation(fields: [sellerId], references: [id], onDelete: Cascade)
@@ -267,18 +283,27 @@ model CatalogItem {
   @@map("catalog")
 }
 
-// Фото позиции каталога, много на одну позицию. sortOrder — явный порядок для
-// галереи (first = обложка/превью), меняется кнопками вверх/вниз в админке.
-model CatalogItemImage {
+// Медиа позиции каталога — фото И видео в одной таблице, много на одну позицию.
+// sortOrder — явный сквозной порядок галереи (first = обложка/превью), меняется
+// кнопками вверх/вниз в админке.
+//
+// У видео url на время обработки указывает на загруженный оригинал, а после
+// транскода перезаписывается ссылкой на mp4; posterUrl — webp-кадр, обложка.
+// Публичная витрина отдаёт только status: READY.
+model CatalogItemMedia {
   id            String      @id @default(cuid())
   catalogItemId String
   catalogItem   CatalogItem @relation(fields: [catalogItemId], references: [id], onDelete: Cascade)
+  type          MediaType   @default(IMAGE)
+  status        MediaStatus @default(READY)
   url           String
+  posterUrl     String? // только у видео
   sortOrder     Int
   createdAt     DateTime    @default(now())
 
   @@index([catalogItemId])
-  @@map("catalog_item_images")
+  @@index([status])
+  @@map("catalog_item_media")
 }
 
 // Предложение продавца поверх позиции справочника + инвентарь (остаток).
