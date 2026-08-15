@@ -1,13 +1,17 @@
 import { Injectable } from '@nestjs/common';
-import { NotificationType, OrderStatus, Prisma } from '@prisma/client';
+import { NotificationType, OrderGroupStatus, Prisma } from '@prisma/client';
 import type { Notification } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
-/** Полезная нагрузка ORDER_STATUS_CHANGED — по ней клиент рендерит текст и решает, что перезапросить. */
-export interface OrderStatusChangedPayload {
-  orderId: string;
-  orderNumber: number;
-  status: OrderStatus;
+/**
+ * Полезная нагрузка ORDER_GROUP_STATUS_CHANGED — по ней клиент рендерит текст и
+ * решает, что перезапросить. Идентификатор группы, а не заказа: эндпоинта по
+ * одному Order в мобильном API нет, открывать по тапу нечего.
+ */
+export interface OrderGroupStatusChangedPayload {
+  groupId: string;
+  groupNumber: number;
+  status: OrderGroupStatus;
 }
 
 /** Страница ленты. cursor отдаём ВСЕГДА, в том числе при пустом items: клиент не должен считать max(seq) сам. */
@@ -41,11 +45,11 @@ export class NotificationsService {
     return this.prisma.notification.create({ data: { userId, type, payload } });
   }
 
-  orderStatusChanged(
+  orderGroupStatusChanged(
     userId: string,
-    payload: OrderStatusChangedPayload,
+    payload: OrderGroupStatusChangedPayload,
   ): Promise<Notification> {
-    return this.emit(userId, NotificationType.ORDER_STATUS_CHANGED, {
+    return this.emit(userId, NotificationType.ORDER_GROUP_STATUS_CHANGED, {
       ...payload,
     });
   }

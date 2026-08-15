@@ -45,14 +45,26 @@ export const ORDER_ACTION_LABELS: Record<OrderStatus, string> = {
   [OrderStatus.CANCELLED]: '❌ Отменить',
 };
 
-/** Что видит покупатель, когда статус его заказа поменялся. */
-export const CUSTOMER_STATUS_MESSAGES: Partial<Record<OrderStatus, string>> = {
-  [OrderStatus.CONFIRMED]: 'Продавец принял ваш заказ.',
-  [OrderStatus.ASSEMBLING]: 'Ваш заказ собирают.',
-  [OrderStatus.DELIVERING]: 'Заказ передан курьеру и едет к вам.',
-  [OrderStatus.ARRIVED]: '🚗 Курьер на месте! Выходите, пожалуйста.',
-  [OrderStatus.DELIVERED]: 'Заказ доставлен. Спасибо за покупку!',
-  [OrderStatus.CANCELLED]: 'Заказ отменён.',
+/**
+ * Что видит покупатель, когда меняется статус его ГРУППЫ — для него заказ это
+ * именно группа (плоских /mobile/orders нет), поэтому карта ключуется
+ * OrderGroupStatus, а не OrderStatus: уведомление на каждый Order из
+ * мультипродавцового чекаута было бы тремя сообщениями об одном событии.
+ *
+ * CONFIRMED — «заказ принят», без упоминания продавца: у группы этот статус
+ * появляется, только когда подтвердили ВСЕ продавцы (см. deriveGroupStatus).
+ */
+export const CUSTOMER_GROUP_STATUS_MESSAGES: Partial<
+  Record<OrderGroupStatus, string>
+> = {
+  [OrderGroupStatus.CONFIRMED]: 'Заказ принят.',
+  [OrderGroupStatus.ASSEMBLING]: 'Ваш заказ собирают.',
+  [OrderGroupStatus.DELIVERING]: 'Заказ передан курьеру и едет к вам.',
+  [OrderGroupStatus.ARRIVED]: '🚗 Курьер на месте! Выходите, пожалуйста.',
+  [OrderGroupStatus.PARTIALLY_DELIVERED]:
+    'Часть заказа доставлена, остальное в пути.',
+  [OrderGroupStatus.DELIVERED]: 'Заказ доставлен. Спасибо за покупку!',
+  [OrderGroupStatus.CANCELLED]: 'Заказ отменён.',
   // NEW не шлём: покупатель только что оформил заказ сам, он и так это знает.
 };
 

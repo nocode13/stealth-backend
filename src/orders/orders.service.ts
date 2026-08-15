@@ -398,8 +398,17 @@ export class OrdersService {
     await this.cache.bump();
 
     const updated = await this.findOneMyGroup(userId, id);
-    for (const order of updated.orders) {
+    // Только те заказы, которые отменила ЭТА операция: заказ, уже отменённый
+    // админом раньше, не должен второй раз дёргать своего продавца.
+    for (const order of updated.orders.filter((o) =>
+      active.some((a) => a.id === o.id),
+    )) {
       await this.notifier.cancelledByCustomer(order);
+    }
+    // Покупателю — только строка в ленте: push и DM были бы уведомлением о его
+    // же нажатии секунду назад.
+    if (updated.status !== group.status) {
+      await this.notifier.groupStatusChanged(updated, { feedOnly: true });
     }
     return updated;
   }
@@ -459,12 +468,20 @@ export class OrdersService {
       );
     }
 
+    // Статус группы выводится из статусов её заказов, поэтому смена одного Order
+    // может как сдвинуть его, так и не сдвинуть (сосед всё ещё позади). Сравнение
+    // «до/после коммита» — то же условие, по которому пишется история группы.
+    const groupStatusBefore = order.group.status;
     const updated = await this.applyStatus(order, dto.status, {
       comment: dto.comment,
       changedByUserId: user.id,
     });
-    await this.notifier.statusChanged(updated);
-    return this.findOneGroupForStaff(user, updated.groupId);
+
+    const group = await this.findOneGroupForStaff(user, updated.groupId);
+    if (group.status !== groupStatusBefore) {
+      await this.notifier.groupStatusChanged(group);
+    }
+    return group;
   }
 
   /**
@@ -523,10 +540,10 @@ export class OrdersService {
     }
 
     const updated = await this.findOneGroupForStaff(user, groupId);
-    for (const order of updated.orders) {
-      if (toChange.some((o) => o.id === order.id)) {
-        await this.notifier.statusChanged(order);
-      }
+    // Одно уведомление на весь каскад: покупателю переезд трёх заказов группы в
+    // DELIVERING — это одно событие «заказ едет», а не три с разными номерами.
+    if (updated.status !== group.status) {
+      await this.notifier.groupStatusChanged(updated);
     }
     return updated;
   }

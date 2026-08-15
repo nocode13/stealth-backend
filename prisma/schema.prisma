@@ -94,12 +94,13 @@ enum PaymentStatus {
 }
 
 // Тип события в ленте уведомлений мобилки. Гранулярность намеренно грубая:
-// конкретный статус заказа лежит в Notification.payload.status, а не в отдельном
+// конкретный статус лежит в Notification.payload.status, а не в отдельном
 // значении енама. Иначе тут появилась бы вторая копия OrderStatus, и она бы
 // разъехалась с ALLOWED_TRANSITIONS при добавлении статуса — ровно то, что
 // AGENTS.md запрещает делать со списком статусов.
 enum NotificationType {
-  ORDER_STATUS_CHANGED // продавец/курьер перевёл заказ в новый статус
+  ORDER_STATUS_CHANGED // legacy: событие по одному Order, больше не эмитится
+  ORDER_GROUP_STATUS_CHANGED // статус ГРУППЫ (всего чекаута) изменился
 }
 
 // Зачем открывали бота по диплинку. Один вариант сегодня (продавец привязывает Telegram),
@@ -588,7 +589,10 @@ model Notification {
   // Данные события, а не готовый текст. Тексты живут в коде клиента: положив сюда
   // отрендеренную строку, мы бы зашили язык в БД навсегда — а мультиязычность уже
   // заложена в Category (nameRu/nameUz/nameEn/nameKaa).
-  // Для ORDER_STATUS_CHANGED: { orderId, orderNumber, status }.
+  // Для ORDER_GROUP_STATUS_CHANGED: { groupId, groupNumber, status } —
+  // status здесь OrderGroupStatus, то есть бывает и PARTIALLY_DELIVERED.
+  // У строк legacy-типа ORDER_STATUS_CHANGED лежит { orderId, orderNumber, status }:
+  // они остаются в ленте как есть, поэтому бутстрап-страница бывает смешанной.
   payload Json
 
   readAt    DateTime?

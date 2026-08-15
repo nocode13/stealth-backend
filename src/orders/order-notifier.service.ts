@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Role, type OrderStatus } from '@prisma/client';
+import { Role, type OrderGroup, type OrderStatus } from '@prisma/client';
 import { InlineKeyboard } from 'grammy';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramNotifyService } from '../telegram/telegram-notify.service';
@@ -9,7 +9,7 @@ import { PushService } from '../push/push.service';
 import type { OrderGroupWithOrders, OrderWithDetails } from './orders.service';
 import {
   ALLOWED_TRANSITIONS,
-  CUSTOMER_STATUS_MESSAGES,
+  CUSTOMER_GROUP_STATUS_MESSAGES,
   ORDER_ACTION_LABELS,
   ORDER_STATUS_LABELS,
   isTerminal,
@@ -24,7 +24,7 @@ const escapeHtml = (text: string): string =>
 
 /**
  * Формирует и рассылает сообщения о заказах: продавцу — новый заказ и карточку
- * с кнопками действий, покупателю — смену статуса.
+ * с кнопками действий, покупателю — смену статуса его ГРУППЫ.
  *
  * Всё «мягкое»: любая ошибка логируется и глотается. Заказ уже в базе, и
  * недоступный Telegram не должен превращаться в ошибку оформления.
@@ -223,7 +223,11 @@ export class OrderNotifier {
   }
 
   /**
-   * Статус поменял продавец → сообщаем покупателю.
+   * Статус ГРУППЫ изменился → сообщаем покупателю. Единица уведомления — группа,
+   * а не Order: для покупателя заказ это весь чекаут (плоских /mobile/orders
+   * нет), и каскад по трём продавцам обязан дать одно уведомление, а не три с
+   * разными номерами. Звать метод должен только тот, кто убедился, что
+   * выведенный статус группы РЕАЛЬНО изменился — здесь этой проверки нет.
    *
    * 1. Лента в БД — её читает мобилка поллингом. Обязательный канал: мобилка
    *    работает как Telegram Mini App, и сообщение бота приходит в чат ПОД ней,
@@ -239,38 +243,48 @@ export class OrderNotifier {
    * Запись в ленту идёт ПЕРВОЙ и её ошибка не глотается: в отличие от чужих
    * Expo/Telegram, локальный insert в Postgres обязан быть надёжным. Внешние
    * каналы «мягкие» — падение сервиса не должно ронять смену статуса.
+   *
+   * `feedOnly` — для самоотмены покупателем: строку в ленту пишем ради полноты
+   * истории, но push и DM были бы уведомлением человека о его же нажатии.
    */
-  async statusChanged(order: OrderWithDetails): Promise<void> {
-    const message = CUSTOMER_STATUS_MESSAGES[order.status];
+  async groupStatusChanged(
+    // Только поля самой группы: метод не зависит от того, отфильтрован ли
+    // include по продавцу (findOneGroupForStaff умеет и так).
+    group: Pick<OrderGroup, 'id' | 'userId' | 'groupNumber' | 'status'>,
+    { feedOnly = false }: { feedOnly?: boolean } = {},
+  ): Promise<void> {
+    const message = CUSTOMER_GROUP_STATUS_MESSAGES[group.status];
     if (!message) return;
 
-    await this.notifications.orderStatusChanged(order.userId, {
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      status: order.status,
+    await this.notifications.orderGroupStatusChanged(group.userId, {
+      groupId: group.id,
+      groupNumber: group.groupNumber,
+      status: group.status,
     });
 
+    if (feedOnly) return;
+
     try {
-      const pushed = await this.push.sendToUser(order.userId, {
-        title: `Заказ #${order.orderNumber}`,
+      const pushed = await this.push.sendToUser(group.userId, {
+        title: `Заказ №${group.groupNumber}`,
         body: message,
         // Тот же payload, что в ленте, — по нему тап открывает нужный экран.
         data: {
-          orderId: order.id,
-          orderNumber: order.orderNumber,
-          status: order.status,
+          groupId: group.id,
+          groupNumber: group.groupNumber,
+          status: group.status,
         },
       });
       if (pushed) return;
 
-      const telegramId = await this.customerTelegramId(order.userId);
+      const telegramId = await this.customerTelegramId(group.userId);
       await this.telegram.sendToCustomer(
         telegramId,
-        `<b>Заказ #${order.orderNumber}</b>\n${message}`,
+        `<b>Заказ №${group.groupNumber}</b>\n${message}`,
       );
     } catch (error) {
       this.logger.error(
-        `Не удалось уведомить покупателя по заказу #${order.orderNumber}: ${(error as Error).message}`,
+        `Не удалось уведомить покупателя по заказу №${group.groupNumber}: ${(error as Error).message}`,
       );
     }
   }
