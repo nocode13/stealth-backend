@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { OrderStatus } from '@prisma/client';
+import { OrderGroupStatus, OrderStatus } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
@@ -136,21 +136,24 @@ export class UpdateOrderCourierDto {
   courierPhone?: string;
 }
 
-export class FindOrdersQueryDto extends CursorPaginationDto {
+/** Группы чекаута — то, чем листают и ищут и админка, и мобилка. */
+export class FindOrderGroupsQueryDto extends CursorPaginationDto {
   @ApiPropertyOptional({
-    enum: OrderStatus,
+    enum: OrderGroupStatus,
     isArray: true,
     description:
-      'Фильтр по статусам. Несколько значений: ?status=NEW&status=CONFIRMED ' +
+      'Фильтр по статусам группы. Несколько значений: ?status=NEW&status=CONFIRMED ' +
       'или ?status=NEW,CONFIRMED. Пусто — все статусы.',
   })
   @IsOptional()
   @Transform(toStatusArray)
   @IsArray()
-  @IsEnum(OrderStatus, { each: true })
-  status?: OrderStatus[];
+  @IsEnum(OrderGroupStatus, { each: true })
+  status?: OrderGroupStatus[];
 
-  @ApiPropertyOptional({ description: 'Номер заказа или телефон получателя' })
+  @ApiPropertyOptional({
+    description: 'Номер группы, номер заказа, телефон или имя получателя',
+  })
   @IsOptional()
   @IsString()
   search?: string;

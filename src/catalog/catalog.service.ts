@@ -4,7 +4,13 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { MediaStatus, MediaType, Prisma, ReviewStatus, Role } from '@prisma/client';
+import {
+  MediaStatus,
+  MediaType,
+  Prisma,
+  ReviewStatus,
+  Role,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
@@ -85,6 +91,7 @@ export class CatalogService {
         ? { contains: query.search, mode: 'insensitive' }
         : undefined,
       categoryId: query.noCategory ? null : query.categoryId,
+      freeDelivery: query.freeDelivery ? true : undefined,
       ...(isSuperAdmin
         ? { status: query.status, sellerId: query.sellerId }
         : {
@@ -122,6 +129,8 @@ export class CatalogService {
       await this.categories.assertUsable(dto.categoryId, user);
     }
     const isSuperAdmin = user.role === Role.SUPER_ADMIN;
+    // Продавец не должен назначать себе бесплатную доставку за счёт платформы.
+    if (!isSuperAdmin) delete dto.freeDelivery;
     // Уникальных ограничений (кроме id) у позиции нет — позиции с одинаковым
     // названием допустимы, ловить P2002 больше не от чего.
     const created = await this.prisma.catalogItem.create({
@@ -148,6 +157,8 @@ export class CatalogService {
     if (dto.status !== undefined && user.role !== Role.SUPER_ADMIN) {
       throw new ForbiddenException('Недостаточно прав');
     }
+    // Продавец не должен назначать себе бесплатную доставку за счёт платформы.
+    if (user.role !== Role.SUPER_ADMIN) delete dto.freeDelivery;
     if (dto.categoryId) {
       await this.categories.assertUsable(dto.categoryId, user);
     }

@@ -92,11 +92,7 @@ export class MediaProcessingService implements OnApplicationBootstrap {
       const poster = await this.image.toWebp(posterPng);
 
       const [url, posterUrl] = await Promise.all([
-        this.storage.upload(
-          `catalog/video/${mediaId}.mp4`,
-          video,
-          'video/mp4',
-        ),
+        this.storage.upload(`catalog/video/${mediaId}.mp4`, video, 'video/mp4'),
         this.storage.upload(
           `catalog/video/${mediaId}-poster.${poster.ext}`,
           poster.buffer,

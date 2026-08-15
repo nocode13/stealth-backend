@@ -218,8 +218,9 @@ export class UsersService {
           : { userId },
       }),
       // Заказы остаются, но обезличенными: суммы и позиции нужны для отчётности,
-      // контакты и точка на карте — уже нет.
-      this.prisma.order.updateMany({
+      // контакты и точка на карте — уже нет. Снапшот живёт в OrderGroup, а не в
+      // Order, поэтому обезличивается группа.
+      this.prisma.orderGroup.updateMany({
         where: { userId },
         data: {
           contactName: 'Удалённый пользователь',

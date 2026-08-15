@@ -27,8 +27,14 @@ export const imageUploadOptions: MulterOptions = {
 export const mediaUploadOptions: MulterOptions = {
   limits: { fileSize: MAX_VIDEO_SIZE },
   fileFilter: (_req, file, callback) => {
-    if (!file.mimetype.startsWith('image/') && !file.mimetype.startsWith('video/')) {
-      callback(new BadRequestException('Файл должен быть фото или видео'), false);
+    if (
+      !file.mimetype.startsWith('image/') &&
+      !file.mimetype.startsWith('video/')
+    ) {
+      callback(
+        new BadRequestException('Файл должен быть фото или видео'),
+        false,
+      );
       return;
     }
     callback(null, true);

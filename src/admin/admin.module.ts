@@ -6,6 +6,7 @@ import { ListingsModule } from '../listings/listings.module';
 import { MetricsModule } from '../metrics/metrics.module';
 import { OrdersModule } from '../orders/orders.module';
 import { SellersModule } from '../sellers/sellers.module';
+import { SettingsModule } from '../settings/settings.module';
 import { StorageModule } from '../storage/storage.module';
 import { TelegramModule } from '../telegram/telegram.module';
 import { AdminAuthController } from './admin-auth.controller';
@@ -16,6 +17,7 @@ import { AdminMetricsController } from './admin-metrics.controller';
 import { AdminOrdersController } from './admin-orders.controller';
 import { AdminSellersController } from './admin-sellers.controller';
 import { AdminSellerStaffController } from './admin-seller-staff.controller';
+import { AdminSettingsController } from './admin-settings.controller';
 
 // API-поверхность админки. Логика — в доменных модулях, тут только контроллеры
 // с session-guard'ами и Swagger-тегами.
@@ -28,6 +30,7 @@ import { AdminSellerStaffController } from './admin-seller-staff.controller';
     MetricsModule,
     OrdersModule,
     SellersModule,
+    SettingsModule,
     StorageModule,
     TelegramModule,
   ],
@@ -40,6 +43,7 @@ import { AdminSellerStaffController } from './admin-seller-staff.controller';
     AdminOrdersController,
     AdminSellersController,
     AdminSellerStaffController,
+    AdminSettingsController,
   ],
 })
 export class AdminModule {}
