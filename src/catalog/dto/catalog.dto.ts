@@ -37,6 +37,14 @@ export class CreateCatalogItemDto {
   @IsOptional()
   @IsString()
   unit?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Позиция из вайтлиста бесплатной доставки. Только SUPER_ADMIN — для остальных игнорируется.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  freeDelivery?: boolean;
 }
 
 // categoryId вынесен из PartialType и объявлен заново: помимо строки он принимает
@@ -91,6 +99,14 @@ export class FindCatalogQueryDto extends CursorPaginationDto {
   @IsOptional()
   @IsString()
   sellerId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Только позиции из вайтлиста бесплатной доставки',
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  freeDelivery?: boolean;
 }
 
 export class ReorderCatalogMediaDto {

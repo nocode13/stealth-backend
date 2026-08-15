@@ -9,36 +9,71 @@ import {
   ListingStatus,
   MediaStatus,
   MediaType,
+  OrderGroupStatus,
   OrderStatus,
   Prisma,
   Role,
 } from '@prisma/client';
-import { randomUUID } from 'crypto';
 import type { AuthPrincipal } from '../common/decorators/current-user.decorator';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddressesService } from '../addresses/addresses.service';
 import { CacheService } from '../cache/cache.service';
+import { SettingsService } from '../settings/settings.service';
 import { OrderNotifier } from './order-notifier.service';
 import {
   CancelOrderDto,
   ChangeOrderStatusDto,
   CreateOrderDto,
-  FindOrdersQueryDto,
+  FindOrderGroupsQueryDto,
   UpdateOrderCourierDto,
 } from './dto/order.dto';
-import { isTransitionAllowed, ORDER_STATUS_LABELS } from './order-status';
+import {
+  deriveGroupStatus,
+  isTerminal,
+  isTransitionAllowed,
+  ORDER_STATUS_LABELS,
+} from './order-status';
 
-// Заказ всегда отдаётся целиком: позиции + история + продавец. Списки заказов
-// короткие (это не витрина), поэтому отдельного «лёгкого» варианта не заводим.
+// Заказ всегда отдаётся целиком: позиции + история + продавец + группа чекаута
+// (контакты и адрес живут только там). Списки заказов короткие (это не витрина),
+// поэтому отдельного «лёгкого» варианта не заводим.
+//
+// group здесь нужен не для HTTP-ответа (OrderResponse его не несёт, см.
+// order.response.ts), а для карточки в Telegram-боте — order-notifier.service.ts
+// читает order.group.* (контакты, адрес).
 const withDetails = {
   items: true,
   history: { orderBy: { createdAt: 'asc' } },
   seller: { select: { id: true, name: true } },
+  group: true,
 } satisfies Prisma.OrderInclude;
 
 export type OrderWithDetails = Prisma.OrderGetPayload<{
   include: typeof withDetails;
+}>;
+
+// sellerId сужает orders группы до заказов конкретного продавца — вся изоляция
+// SELLER в групповых чтениях держится на этом where, а не на пост-фильтрации
+// ответа (см. groupStaffScope/sellerScopeId ниже).
+// ⚠️ satisfies, а не аннотация возвращаемого типа: аннотация `: Prisma.OrderGroupInclude`
+// схлопнула бы литеральный тип до общего union, и OrderGroupWithOrders потерял бы
+// items/history/seller на вложенных orders (см. withDetails выше).
+function withGroupOrders(sellerId?: string) {
+  return {
+    orders: {
+      where: sellerId ? { sellerId } : undefined,
+      include: withDetails,
+      orderBy: { createdAt: 'asc' },
+    },
+    // Не фильтруется по sellerId, в отличие от orders выше: статус группы виден
+    // продавцу целиком (см. toSellerOrderGroupResponse), значит и её история — тоже.
+    history: { orderBy: { createdAt: 'asc' } },
+  } satisfies Prisma.OrderGroupInclude;
+}
+
+export type OrderGroupWithOrders = Prisma.OrderGroupGetPayload<{
+  include: ReturnType<typeof withGroupOrders>;
 }>;
 
 // Обложка для снапшота позиции заказа. В галерее первым может стоять видео, а в
@@ -61,6 +96,7 @@ export class OrdersService {
     private readonly notifier: OrderNotifier,
     private readonly addresses: AddressesService,
     private readonly cache: CacheService,
+    private readonly settings: SettingsService,
   ) {}
 
   // ─────────────────────────────── создание ───────────────────────────────
@@ -73,7 +109,7 @@ export class OrdersService {
   async createFromCart(
     userId: string,
     dto: CreateOrderDto,
-  ): Promise<OrderWithDetails[]> {
+  ): Promise<OrderGroupWithOrders> {
     const cartItems = await this.prisma.cartItem.findMany({
       where: { userId },
       include: {
@@ -124,7 +160,6 @@ export class OrdersService {
       }
     }
 
-    const groupId = randomUUID();
     const bySeller = new Map<string, typeof cartItems>();
     for (const item of cartItems) {
       const list = bySeller.get(item.listing.sellerId) ?? [];
@@ -132,8 +167,35 @@ export class OrdersService {
       bySeller.set(item.listing.sellerId, list);
     }
 
-    const orders = await this.prisma.$transaction(async (tx) => {
-      const created: OrderWithDetails[] = [];
+    const checkoutTotal = cartItems.reduce(
+      (sum, item) => sum + item.listing.price * item.quantity,
+      0,
+    );
+    // Тариф снапшотится в группу на момент оформления: смена настроек не должна
+    // менять уже созданные заказы.
+    const quote = await this.settings.quote(checkoutTotal, {
+      allFreeDelivery: cartItems.every(
+        (item) => item.listing.catalogItem.freeDelivery,
+      ),
+    });
+
+    const group = await this.prisma.$transaction(async (tx) => {
+      const group = await tx.orderGroup.create({
+        data: {
+          userId,
+          contactName: dto.contactName,
+          contactPhone: dto.contactPhone,
+          deliveryAddress: addressSnapshot.address,
+          deliveryComment: addressSnapshot.comment,
+          deliveryLat: addressSnapshot.lat,
+          deliveryLng: addressSnapshot.lng,
+          savedAddressId: dto.savedAddressId,
+          itemsTotal: quote.itemsTotal,
+          deliveryFee: quote.deliveryFee,
+          total: quote.total,
+          history: { create: { status: OrderGroupStatus.NEW } },
+        },
+      });
 
       for (const [sellerId, items] of bySeller) {
         for (const item of items) {
@@ -156,22 +218,12 @@ export class OrdersService {
           0,
         );
 
-        const order = await tx.order.create({
+        await tx.order.create({
           data: {
-            groupId,
+            groupId: group.id,
             userId,
             sellerId,
             itemsTotal,
-            // Доставка пока бесплатная: тарифов нет, поле заложено под курьерку.
-            deliveryFee: 0,
-            total: itemsTotal,
-            contactName: dto.contactName,
-            contactPhone: dto.contactPhone,
-            deliveryAddress: addressSnapshot.address,
-            deliveryComment: addressSnapshot.comment,
-            deliveryLat: addressSnapshot.lat,
-            deliveryLng: addressSnapshot.lng,
-            savedAddressId: dto.savedAddressId,
             items: {
               create: items.map((item) => ({
                 listingId: item.listingId,
@@ -185,9 +237,7 @@ export class OrdersService {
             },
             history: { create: { status: OrderStatus.NEW } },
           },
-          include: withDetails,
         });
-        created.push(order);
       }
 
       // Один раз на весь чекаут (не на каждого продавца), внутри той же транзакции —
@@ -206,7 +256,11 @@ export class OrdersService {
       }
 
       await tx.cartItem.deleteMany({ where: { userId } });
-      return created;
+
+      return tx.orderGroup.findUniqueOrThrow({
+        where: { id: group.id },
+        include: withGroupOrders(),
+      });
     });
 
     // Остаток списан — витрина (фильтр stock > 0 и сам остаток в карточке) устарела.
@@ -220,9 +274,11 @@ export class OrdersService {
     await this.backfillProfilePhone(userId, dto.contactName, dto.contactPhone);
 
     // Уведомления — строго после коммита и не блокируют ответ клиенту.
-    await this.notifier.orderCreated(orders);
+    await this.notifier.orderCreated(group.orders);
+    // Отдельно, одной сводной карточкой на всю группу — платформенным SUPER_ADMIN.
+    await this.notifier.groupCreatedForSuperAdmins(group);
 
-    return orders;
+    return group;
   }
 
   private async resolveSavedAddress(
@@ -272,14 +328,16 @@ export class OrdersService {
   }
 
   // ──────────────────────────────── мобилка ────────────────────────────────
+  // API покупателя: заказ — это группа (см. AGENTS.md «Заказы»). Плоских
+  // /mobile/orders больше нет.
 
-  async findMine(
+  async findMyGroups(
     userId: string,
-    query: FindOrdersQueryDto,
-  ): Promise<CursorPage<OrderWithDetails>> {
-    const rows = await this.prisma.order.findMany({
-      where: { userId, ...statusFilter(query.status) },
-      include: withDetails,
+    query: FindOrderGroupsQueryDto,
+  ): Promise<CursorPage<OrderGroupWithOrders>> {
+    const rows = await this.prisma.orderGroup.findMany({
+      where: { userId, ...groupStatusFilter(query.status) },
+      include: withGroupOrders(),
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       cursor: query.cursor ? { id: query.cursor } : undefined,
       skip: query.cursor ? 1 : 0,
@@ -288,48 +346,86 @@ export class OrdersService {
     return toCursorPage(rows, query.limit);
   }
 
-  async findOneMine(userId: string, id: string): Promise<OrderWithDetails> {
-    const order = await this.findOrFail(id);
-    if (order.userId !== userId) throw new ForbiddenException('Чужой заказ');
-    return order;
+  async findOneMyGroup(
+    userId: string,
+    id: string,
+  ): Promise<OrderGroupWithOrders> {
+    const group = await this.findGroupOrFail(id);
+    if (group.userId !== userId) throw new ForbiddenException('Чужой заказ');
+    return group;
   }
 
-  /** Покупатель отменяет сам — только пока заказ не уехал. */
-  async cancelMine(
+  /**
+   * Покупатель отменяет ЧЕКАУТ, а не часть его. Если хотя бы один продавец начал
+   * сборку, отмену запрещаем целиком: частичной отмены в UI нет, и «отменил, а
+   * половина всё равно приедет» — худший из возможных исходов.
+   */
+  async cancelMyGroup(
     userId: string,
     id: string,
     dto: CancelOrderDto,
-  ): Promise<OrderWithDetails> {
-    const order = await this.findOneMine(userId, id);
+  ): Promise<OrderGroupWithOrders> {
+    const group = await this.findOneMyGroup(userId, id);
+    const active = group.orders.filter((o) => !isTerminal(o.status));
+    if (active.length === 0) {
+      throw new BadRequestException('Заказ уже завершён');
+    }
     if (
-      order.status !== OrderStatus.NEW &&
-      order.status !== OrderStatus.CONFIRMED
+      active.some(
+        (o) =>
+          o.status !== OrderStatus.NEW && o.status !== OrderStatus.CONFIRMED,
+      )
     ) {
       throw new BadRequestException(
         'Заказ уже собирается — отмену согласуйте с продавцом',
       );
     }
-    const updated = await this.applyStatus(order, OrderStatus.CANCELLED, {
-      comment: dto.reason,
-      changedByUserId: userId,
+
+    // ⚠️ ОДНА транзакция на всю группу. Вызов applyStatus в цикле дал бы N
+    // транзакций: упавшая вторая оставила бы первый заказ отменённым — ровно та
+    // частичная отмена, которую мы только что запретили. applyStatusTx —
+    // приватная половина applyStatus без собственной транзакции, для такого
+    // переиспользования.
+    await this.prisma.$transaction(async (tx) => {
+      for (const order of active) {
+        await this.applyStatusTx(tx, order, OrderStatus.CANCELLED, {
+          comment: dto.reason,
+          changedByUserId: userId,
+        });
+      }
     });
-    await this.notifier.cancelledByCustomer(updated);
+    // Остатки вернулись — строго после коммита.
+    await this.cache.bump();
+
+    const updated = await this.findOneMyGroup(userId, id);
+    // Только те заказы, которые отменила ЭТА операция: заказ, уже отменённый
+    // админом раньше, не должен второй раз дёргать своего продавца.
+    for (const order of updated.orders.filter((o) =>
+      active.some((a) => a.id === o.id),
+    )) {
+      await this.notifier.cancelledByCustomer(order);
+    }
+    // Покупателю — только строка в ленте: push и DM были бы уведомлением о его
+    // же нажатии секунду назад.
+    if (updated.status !== group.status) {
+      await this.notifier.groupStatusChanged(updated, { feedOnly: true });
+    }
     return updated;
   }
 
   // ───────────────────────────────── админка ─────────────────────────────────
 
-  async findAllForStaff(
+  async findGroupsForStaff(
     user: AuthPrincipal,
-    query: FindOrdersQueryDto,
-  ): Promise<CursorPage<OrderWithDetails>> {
-    const rows = await this.prisma.order.findMany({
+    query: FindOrderGroupsQueryDto,
+  ): Promise<CursorPage<OrderGroupWithOrders>> {
+    const rows = await this.prisma.orderGroup.findMany({
       where: {
-        ...this.staffScope(user, query.sellerId),
-        ...statusFilter(query.status),
-        ...searchFilter(query.search),
+        ...this.groupStaffScope(user, query.sellerId),
+        ...groupStatusFilter(query.status),
+        ...groupSearchFilter(query.search),
       },
-      include: withDetails,
+      include: withGroupOrders(this.sellerScopeId(user)),
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       cursor: query.cursor ? { id: query.cursor } : undefined,
       skip: query.cursor ? 1 : 0,
@@ -338,27 +434,31 @@ export class OrdersService {
     return toCursorPage(rows, query.limit);
   }
 
-  async findOneForStaff(
+  async findOneGroupForStaff(
     user: AuthPrincipal,
     id: string,
-  ): Promise<OrderWithDetails> {
-    const order = await this.findOrFail(id);
-    this.assertStaffAccess(user, order);
-    return order;
+  ): Promise<OrderGroupWithOrders> {
+    const group = await this.findGroupOrFail(id, this.sellerScopeId(user));
+    // SELLER не участвует в этой группе — существование чужой группы ему не
+    // подтверждаем, поэтому 404, а не 403.
+    if (group.orders.length === 0) {
+      throw new NotFoundException('Заказ не найден');
+    }
+    return group;
   }
 
   /**
-   * Смена статуса продавцом — и из админки, и из кабинета в Telegram-боте.
-   * Обе поверхности обязаны ходить сюда, а не в prisma напрямую: тут и валидация
-   * перехода, и запись в историю, и возврат остатка при отмене.
+   * Смена статуса — теперь только SUPER_ADMIN, и из админки, и (гипотетически)
+   * из бота: у кабинета продавца кнопки статусов убраны (см. seller.composer.ts),
+   * иначе запрет обходился бы в два клика.
    */
   async changeStatus(
     user: AuthPrincipal,
     id: string,
     dto: ChangeOrderStatusDto,
-  ): Promise<OrderWithDetails> {
+  ): Promise<OrderGroupWithOrders> {
+    this.assertSuperAdmin(user);
     const order = await this.findOrFail(id);
-    this.assertStaffAccess(user, order);
 
     if (!isTransitionAllowed(order.status, dto.status)) {
       throw new BadRequestException(
@@ -368,11 +468,83 @@ export class OrdersService {
       );
     }
 
+    // Статус группы выводится из статусов её заказов, поэтому смена одного Order
+    // может как сдвинуть его, так и не сдвинуть (сосед всё ещё позади). Сравнение
+    // «до/после коммита» — то же условие, по которому пишется история группы.
+    const groupStatusBefore = order.group.status;
     const updated = await this.applyStatus(order, dto.status, {
       comment: dto.comment,
       changedByUserId: user.id,
     });
-    await this.notifier.statusChanged(updated);
+
+    const group = await this.findOneGroupForStaff(user, updated.groupId);
+    if (group.status !== groupStatusBefore) {
+      await this.notifier.groupStatusChanged(group);
+    }
+    return group;
+  }
+
+  /**
+   * Смена статуса ГРУППЫ целиком — SUPER_ADMIN, каскадом на все её нетерминальные
+   * заказы. OrderGroup.status по-прежнему не пишется напрямую: applyStatusTx
+   * внутри цикла пересчитывает его через deriveGroupStatus, как и везде —
+   * второй карты переходов тут нет, используется тот же ALLOWED_TRANSITIONS.
+   * Одна транзакция на всю группу по тем же причинам, что в cancelMyGroup:
+   * частичный каскад хуже, чем явный отказ.
+   */
+  async changeGroupStatus(
+    user: AuthPrincipal,
+    groupId: string,
+    dto: ChangeOrderStatusDto,
+  ): Promise<OrderGroupWithOrders> {
+    this.assertSuperAdmin(user);
+    const group = await this.findGroupOrFail(groupId);
+
+    const active = group.orders.filter((o) => !isTerminal(o.status));
+    if (active.length === 0) {
+      throw new BadRequestException('Все заказы группы уже завершены');
+    }
+
+    const toChange = active.filter((o) => o.status !== dto.status);
+    if (toChange.length === 0) {
+      // Все нетерминальные заказы уже в целевом статусе — идемпотентный no-op.
+      return group;
+    }
+
+    const blocked = toChange.filter(
+      (o) => !isTransitionAllowed(o.status, dto.status),
+    );
+    if (blocked.length > 0) {
+      const details = blocked
+        .map(
+          (o) =>
+            `#${o.orderNumber} (${o.seller.name}): «${ORDER_STATUS_LABELS[o.status]}»`,
+        )
+        .join(', ');
+      throw new BadRequestException(
+        `Нельзя перевести всю группу в «${ORDER_STATUS_LABELS[dto.status]}» — блокируют заказы: ${details}`,
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const order of toChange) {
+        await this.applyStatusTx(tx, order, dto.status, {
+          comment: dto.comment,
+          changedByUserId: user.id,
+        });
+      }
+    });
+
+    if (dto.status === OrderStatus.CANCELLED) {
+      await this.cache.bump();
+    }
+
+    const updated = await this.findOneGroupForStaff(user, groupId);
+    // Одно уведомление на весь каскад: покупателю переезд трёх заказов группы в
+    // DELIVERING — это одно событие «заказ едет», а не три с разными номерами.
+    if (updated.status !== group.status) {
+      await this.notifier.groupStatusChanged(updated);
+    }
     return updated;
   }
 
@@ -380,55 +552,118 @@ export class OrdersService {
     user: AuthPrincipal,
     id: string,
     dto: UpdateOrderCourierDto,
+  ): Promise<OrderGroupWithOrders> {
+    this.assertSuperAdmin(user);
+    const order = await this.findOrFail(id);
+    await this.prisma.order.update({ where: { id }, data: dto });
+    return this.findOneGroupForStaff(user, order.groupId);
+  }
+
+  /**
+   * Единственный оставшийся потребитель — карточка-просмотр в кабинете продавца
+   * в Telegram-боте (`sel:show:<id>`, seller.composer.ts): бот показывает один
+   * Order, а не целую группу, и остаётся доступен SELLER на чтение (менять
+   * статус он больше не может — см. changeStatus).
+   */
+  async findOneForStaff(
+    user: AuthPrincipal,
+    id: string,
   ): Promise<OrderWithDetails> {
     const order = await this.findOrFail(id);
     this.assertStaffAccess(user, order);
-    return this.prisma.order.update({
-      where: { id },
-      data: dto,
-      include: withDetails,
-    });
+    return order;
   }
 
   // ───────────────────────────────── общее ─────────────────────────────────
 
-  /** Применяет статус + пишет историю + возвращает остаток при отмене. */
+  /** Применяет статус + пишет историю + возвращает остаток при отмене. Своя транзакция. */
   private async applyStatus(
     order: OrderWithDetails,
     status: OrderStatus,
     meta: { comment?: string; changedByUserId?: string },
   ): Promise<OrderWithDetails> {
-    const updated = await this.prisma.$transaction(async (tx) => {
-      if (status === OrderStatus.CANCELLED) {
-        await this.restock(tx, order);
-      }
-      return tx.order.update({
-        where: { id: order.id },
-        data: {
-          status,
-          confirmedAt:
-            status === OrderStatus.CONFIRMED ? new Date() : undefined,
-          deliveredAt:
-            status === OrderStatus.DELIVERED ? new Date() : undefined,
-          cancelReason:
-            status === OrderStatus.CANCELLED ? meta.comment : undefined,
-          history: {
-            create: {
-              status,
-              comment: meta.comment,
-              changedByUserId: meta.changedByUserId,
-            },
-          },
-        },
-        include: withDetails,
-      });
-    });
+    const updated = await this.prisma.$transaction((tx) =>
+      this.applyStatusTx(tx, order, status, meta),
+    );
 
     // Отмена вернула остаток в продажу — витрина устарела. Строго после коммита.
     if (status === OrderStatus.CANCELLED) {
       await this.cache.bump();
     }
     return updated;
+  }
+
+  /**
+   * То же самое, но внутри ЧУЖОЙ транзакции — переиспользуется cancelMyGroup,
+   * которой нужно отменить несколько заказов одним коммитом (см. предупреждение
+   * там). Кэш здесь не бампается — это ответственность вызывающего.
+   */
+  private async applyStatusTx(
+    tx: Prisma.TransactionClient,
+    order: OrderWithDetails,
+    status: OrderStatus,
+    meta: { comment?: string; changedByUserId?: string },
+  ): Promise<OrderWithDetails> {
+    if (status === OrderStatus.CANCELLED) {
+      await this.restock(tx, order);
+    }
+    await tx.order.update({
+      where: { id: order.id },
+      data: {
+        status,
+        confirmedAt: status === OrderStatus.CONFIRMED ? new Date() : undefined,
+        deliveredAt: status === OrderStatus.DELIVERED ? new Date() : undefined,
+        cancelReason:
+          status === OrderStatus.CANCELLED ? meta.comment : undefined,
+        history: {
+          create: {
+            status,
+            comment: meta.comment,
+            changedByUserId: meta.changedByUserId,
+          },
+        },
+      },
+    });
+
+    // Статус группы выводится из статусов её заказов — ни одна поверхность не
+    // пишет его напрямую (см. deriveGroupStatus в src/orders/order-status.ts).
+    const siblingStatuses = await tx.order.findMany({
+      where: { groupId: order.groupId },
+      select: { status: true },
+    });
+    const derivedStatus = deriveGroupStatus(
+      siblingStatuses.map((s) => s.status),
+    );
+
+    // История группы пишется только на РЕАЛЬНОЕ изменение выведенного статуса, а не
+    // на каждый вызов applyStatusTx — иначе каскад по нескольким заказам группы за
+    // одну операцию (changeGroupStatus, cancelMyGroup) плодил бы запись на каждый
+    // задетый заказ вместо одной на фактический переход.
+    const currentGroup = await tx.orderGroup.findUniqueOrThrow({
+      where: { id: order.groupId },
+      select: { status: true },
+    });
+    await tx.orderGroup.update({
+      where: { id: order.groupId },
+      data: {
+        status: derivedStatus,
+        history:
+          derivedStatus !== currentGroup.status
+            ? {
+                create: {
+                  status: derivedStatus,
+                  comment: meta.comment,
+                  changedByUserId: meta.changedByUserId,
+                },
+              }
+            : undefined,
+      },
+    });
+
+    return tx.order.findUniqueOrThrow({
+      where: { id: order.id },
+      include: withDetails,
+    });
   }
 
   // Отменённый заказ возвращает товар в продажу. listingId может быть null,
@@ -455,17 +690,22 @@ export class OrdersService {
     return order;
   }
 
-  // SELLER видит только свои заказы; его sellerId в query игнорируется, чтобы
-  // нельзя было подсмотреть чужие — та же схема, что в CategoriesService.
-  private staffScope(
-    user: AuthPrincipal,
+  private async findGroupOrFail(
+    id: string,
     sellerId?: string,
-  ): Prisma.OrderWhereInput {
-    if (user.role === Role.SUPER_ADMIN) return { sellerId };
-    if (!user.sellerId) {
-      throw new ForbiddenException('Пользователь не привязан к продавцу');
+  ): Promise<OrderGroupWithOrders> {
+    const group = await this.prisma.orderGroup.findUnique({
+      where: { id },
+      include: withGroupOrders(sellerId),
+    });
+    if (!group) throw new NotFoundException('Заказ не найден');
+    return group;
+  }
+
+  private assertSuperAdmin(user: AuthPrincipal): void {
+    if (user.role !== Role.SUPER_ADMIN) {
+      throw new ForbiddenException('Статус заказа меняет только SUPER_ADMIN');
     }
-    return { sellerId: user.sellerId };
   }
 
   private assertStaffAccess(
@@ -478,37 +718,49 @@ export class OrdersService {
     }
   }
 
-  /** Поиск в админке: по номеру заказа либо по телефону получателя. */
-  async findByOrderNumber(
+  // undefined для SUPER_ADMIN — он видит все заказы внутри группы независимо от
+  // query.sellerId (тот фильтрует, КАКИЕ ГРУППЫ попали в выборку, а не какие
+  // заказы внутри них видны). Для SELLER — всегда свой sellerId.
+  private sellerScopeId(user: AuthPrincipal): string | undefined {
+    return user.role === Role.SUPER_ADMIN
+      ? undefined
+      : (user.sellerId ?? undefined);
+  }
+
+  // SELLER видит только группы, где участвует хотя бы один его заказ; его query
+  // sellerId игнорируется — та же схема, что в CategoriesService.
+  private groupStaffScope(
     user: AuthPrincipal,
-    orderNumber: number,
-  ): Promise<OrderWithDetails | null> {
-    const order = await this.prisma.order.findUnique({
-      where: { orderNumber },
-      include: withDetails,
-    });
-    if (!order) return null;
-    this.assertStaffAccess(user, order);
-    return order;
+    sellerId?: string,
+  ): Prisma.OrderGroupWhereInput {
+    if (user.role === Role.SUPER_ADMIN) {
+      return sellerId ? { orders: { some: { sellerId } } } : {};
+    }
+    if (!user.sellerId) {
+      throw new ForbiddenException('Пользователь не привязан к продавцу');
+    }
+    return { orders: { some: { sellerId: user.sellerId } } };
   }
 }
 
-/**
- * Фильтр по статусам. Пустой массив трактуется как «без фильтра», а не как
- * `{ in: [] }` — иначе `?status=` (пустая строка от клиента, который просто не
- * выбрал фильтр) молча вернул бы ноль заказов вместо всех.
- */
-function statusFilter(status?: OrderStatus[]): Prisma.OrderWhereInput {
+function groupStatusFilter(
+  status?: OrderGroupStatus[],
+): Prisma.OrderGroupWhereInput {
   if (!status?.length) return {};
   return { status: status.length === 1 ? status[0] : { in: status } };
 }
 
-function searchFilter(search?: string): Prisma.OrderWhereInput {
+/** Поиск в админке: по номеру группы, номеру заказа внутри неё, телефону или имени. */
+function groupSearchFilter(search?: string): Prisma.OrderGroupWhereInput {
   if (!search) return {};
   const asNumber = Number(search.replace(/^#/, ''));
+  const numeric = Number.isInteger(asNumber) ? asNumber : undefined;
   return {
     OR: [
-      ...(Number.isInteger(asNumber) ? [{ orderNumber: asNumber }] : []),
+      ...(numeric !== undefined ? [{ groupNumber: numeric }] : []),
+      ...(numeric !== undefined
+        ? [{ orders: { some: { orderNumber: numeric } } }]
+        : []),
       { contactPhone: { contains: search } },
       { contactName: { contains: search, mode: 'insensitive' as const } },
     ],

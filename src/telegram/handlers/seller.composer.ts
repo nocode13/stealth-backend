@@ -47,8 +47,9 @@ const menuKeyboard = new InlineKeyboard()
  * и принадлежность заказа проверяются заново на КАЖДЫЙ колбэк (resolveSeller +
  * OrdersService), а не берутся из того, что пришло в кнопке.
  *
- * Смена статуса идёт строго через OrdersService.changeStatus: там валидация
- * переходов, история и возврат остатка. Прямых prisma.update тут нет.
+ * Кабинет read-only: менять статус отсюда нельзя (нет ни кнопок, ни колбэка) —
+ * это единственный способ не дать SELLER обойти запрет из AdminOrdersController
+ * в два клика. Списки и карточка-просмотр (findOneForStaff) остаются.
  */
 @Injectable()
 export class SellerComposer {
@@ -125,58 +126,17 @@ export class SellerComposer {
           seller.principal,
           ctx.match[1],
         );
-        const { text, keyboard } = this.notifier.buildSellerCard(order);
+        const { text, keyboard } = await this.notifier.buildSellerCard(order);
         await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
       } catch (error) {
         await ctx.reply(this.errorText(error));
       }
     });
 
-    // Смена статуса. Формат: ord:<orderId>:<STATUS> — тот же, что в кнопках
-    // уведомления о новом заказе, поэтому карточку можно нажимать откуда угодно.
-    composer.callbackQuery(/^ord:([^:]+):(.+)$/, async (ctx) => {
-      const seller = await this.resolveSeller(ctx);
-      if (!seller) {
-        await ctx.answerCallbackQuery({
-          text: 'Недостаточно прав',
-          show_alert: true,
-        });
-        return;
-      }
-
-      const [, orderId, status] = ctx.match;
-      if (!Object.values(OrderStatus).includes(status as OrderStatus)) {
-        await ctx.answerCallbackQuery({
-          text: 'Неизвестный статус',
-          show_alert: true,
-        });
-        return;
-      }
-
-      try {
-        const updated = await this.orders.changeStatus(
-          seller.principal,
-          orderId,
-          {
-            status: status as OrderStatus,
-          },
-        );
-        await ctx.answerCallbackQuery({
-          text: `Статус: ${ORDER_STATUS_LABELS[updated.status]}`,
-        });
-        // Перерисовываем карточку на месте — кнопки следующего шага меняются.
-        const { text, keyboard } = this.notifier.buildSellerCard(updated);
-        await ctx.editMessageText(text, {
-          parse_mode: 'HTML',
-          reply_markup: keyboard,
-        });
-      } catch (error) {
-        await ctx.answerCallbackQuery({
-          text: this.errorText(error),
-          show_alert: true,
-        });
-      }
-    });
+    // Смена статуса кнопкой (ord:<orderId>:<STATUS>) убрана вместе с кнопками в
+    // buildSellerCard — статус теперь меняет только SUPER_ADMIN из админки (см.
+    // AGENTS.md «Заказы»). Старые кнопки в истории чата просто не находят
+    // обработчик — grammy их молча игнорирует, бот не падает.
 
     return composer;
   }
@@ -199,8 +159,8 @@ export class SellerComposer {
         id: true,
         orderNumber: true,
         status: true,
-        total: true,
-        contactName: true,
+        itemsTotal: true,
+        group: { select: { contactName: true } },
       },
     });
 
@@ -216,7 +176,7 @@ export class SellerComposer {
       keyboard
         .text(
           `#${order.orderNumber} · ${ORDER_STATUS_LABELS[order.status]} · ${(
-            order.total / 100
+            order.itemsTotal / 100
           ).toLocaleString('ru-RU')}`,
           `sel:show:${order.id}`,
         )

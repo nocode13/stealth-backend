@@ -146,12 +146,20 @@ export class AdminCatalogController {
     user: AuthUser,
   ) {
     const key = this.mediaProcessing.sourceKey(file.originalname);
-    const sourceUrl = await this.storage.upload(key, file.buffer, file.mimetype);
+    const sourceUrl = await this.storage.upload(
+      key,
+      file.buffer,
+      file.mimetype,
+    );
     let created: { item: CatalogItem; mediaId: string };
     try {
       created = await this.catalog.addMedia(
         id,
-        { url: sourceUrl, type: MediaType.VIDEO, status: MediaStatus.PROCESSING },
+        {
+          url: sourceUrl,
+          type: MediaType.VIDEO,
+          status: MediaStatus.PROCESSING,
+        },
         user,
       );
     } catch (error) {

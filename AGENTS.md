@@ -58,7 +58,7 @@ src/
   common/                  # @Roles, @CurrentUser, RolesGuard, курсорная пагинация,
                            # telegram-identity.ts (покупатель и staff — разные учётки)
   auth/                    # стратегии и guard'ы: JWT / session / local
-  users/ sellers/ categories/ catalog/ listings/ cart/ addresses/
+  users/ sellers/ categories/ catalog/ listings/ cart/ addresses/ settings/
   orders/                  # OrdersService, order-status.ts, order-notifier.service.ts
   notifications/ metrics/  # in-app лента · агрегаты для дашборда админки
   storage/                 # StorageService (S3) + ImageService (sharp → webp)
@@ -69,7 +69,9 @@ src/
 ## Доменная модель (`prisma/schema.prisma`)
 
 **Сущность без собственных полей не заводится**: нет обёртки `Cart` над `CartItem` (корзина у
-юзера неявно одна), нет модели `Checkout` — заказы одного оформления связывает `groupId`.
+юзера неявно одна). Отдельная модель `Checkout` тоже не заводится — её роль играет
+**`OrderGroup`**: заказы одного оформления связывает `Order.groupId`, настоящий FK
+на `order_groups.id` (не просто строка).
 
 - **User** — `telegramId?` (nullable unique) — **якорь личности покупателя** (основной бот);
   `staffTelegramId?` (nullable unique) — адрес кабинета в боте продавца, колонки независимы
@@ -93,10 +95,15 @@ src/
   на витрине мобилки видны **все** `APPROVED` — ограничение касается создания, не показа.
   `Category`: `nameRu` (обязательное, фолбэк) + `nameUz?/nameEn?/nameKaa?`.
   `CatalogItem`: `categoryId?` (nullable, `Restrict`), `unit` (дефолт «шт»), галерея
-  `images: CatalogItemImage[]`. Общий enum `ReviewStatus`.
+  `images: CatalogItemImage[]`. Общий enum `ReviewStatus`. `freeDelivery: Boolean` —
+  вайтлист бесплатной доставки, ставит только `SUPER_ADMIN` (см. «Доставка» ниже).
 - **Listing** — предложение продавца поверх позиции: `price`, `stock`, `status`
   (`DRAFT|ACTIVE|ARCHIVED`), `@@unique([sellerId, catalogItemId])`. При создании
   `CatalogService.assertUsable` проверяет, что позиция одобрена и видна этому продавцу.
+- **PlatformSettings** — синглтон-строка (`id = "default"`), правит `SUPER_ADMIN` из
+  `admin/settings`: `deliveryFee` (тариф за чекаут) и `freeDeliveryThreshold?` (порог
+  бесплатной доставки, `null` = порога нет). `SettingsService.quote()` — единственное
+  место в проекте, где считается доставка (см. «Доставка» ниже).
 - **Деньги — `Int` в тийинах** (1 сум = 100 тийин), колонки валюты нет.
 - **RefreshToken** — sha256-хэши активных refresh-токенов.
 - **TelegramAuthSession** — вход по nonce; токенов в ней нет (при консьюме выпускается свежая
@@ -107,13 +114,31 @@ src/
   номер ещё не подтверждён), счётчик `attempts` и флаг `mismatch`. Отдельная модель, а не
   поля в `TelegramAuthSession`: другой жизненный цикл (два шага подтверждения).
 - **SavedAddress** — адресная книга (`label?`, `address`, `comment?`, `lat?/lng?`).
-- **Notification** — in-app лента. **Order / OrderItem / OrderStatusHistory** — см. «Заказы»;
-  `orderNumber` autoincrement, по нему ищут в админке.
+- **Notification** — in-app лента. **OrderGroup / Order / OrderItem / OrderStatusHistory** —
+  см. «Заказы»; `orderNumber`/`groupNumber` autoincrement, по ним ищут в админке.
 
-**Снапшоты, а не FK.** `OrderItem` копирует имя, обложку, единицу и цену; `Order` — контакты,
-адрес и деньги. Листинг может подорожать, уехать в `ARCHIVED` или удалиться (`listingId` →
+**Снапшоты, а не FK.** `OrderItem` копирует имя, обложку, единицу и цену; `OrderGroup` —
+контакты, адрес и способ оплаты **одним разом на весь чекаут** (раньше это дублировалось в
+каждом `Order`). Листинг может подорожать, уехать в `ARCHIVED` или удалиться (`listingId` →
 `null`), `SavedAddress` — измениться, но оформленный заказ обязан остаться читаемым.
-`savedAddressId` (`SetNull`) хранится только ради трейсинга.
+`savedAddressId` (`SetNull`, теперь на `OrderGroup`) хранится только ради трейсинга.
+
+**Доставка платформенная, не продавцовая.** `OrderGroup.itemsTotal/deliveryFee/total` — итог
+по всему чекауту, тариф считается один раз через `SettingsService.quote()` и **снапшотится**
+в группу на момент оформления (смена тарифа не трогает уже созданные заказы). `Order` несёт
+только `itemsTotal` — долю конкретного продавца, на ней держатся метрики выручки и карточка
+в боте; доставка на заказ не раскладывается и колонок `deliveryFee`/`total` у него нет.
+
+**Статус группы выводится, не выставляется.** `OrderGroupStatus` повторяет `OrderStatus` плюс
+`PARTIALLY_DELIVERED` (часть продавцов уже довезла, часть нет — возможно только у группы).
+`deriveGroupStatus()` (`src/orders/order-status.ts`) считает его из статусов заказов группы
+после каждого `changeStatus`/`cancelMine`; второй карты переходов нет — источник правды
+остаётся один, `ALLOWED_TRANSITIONS` у `Order`. Никакая поверхность не пишет
+`OrderGroup.status` напрямую. Таймлайн группы — `OrderGroupStatusHistory` (зеркало
+`OrderStatusHistory`), пишется там же, в `applyStatusTx`, но только когда выведенный статус
+**реально изменился**: иначе каскад по нескольким заказам группы за одну операцию
+(`changeGroupStatus`, `cancelMyGroup`) плодил бы запись на каждый задетый заказ вместо одной
+на фактический переход.
 
 ## API
 
@@ -125,10 +150,11 @@ src/
 | `admin/categories` | SUPER_ADMIN, SELLER | CRUD + `PATCH /:id/status` — **только SUPER_ADMIN** (`@Roles` на хендлере перебивает класс) |
 | `admin/catalog` | SUPER_ADMIN, SELLER | CRUD + `POST /:id/images`, `DELETE /:id/images/:imageId`, `PATCH /:id/images/:imageId/reorder` |
 | `admin/listings` | SELLER, SUPER_ADMIN | CRUD, `sellerId` из пользователя |
-| `admin/orders` | SELLER, SUPER_ADMIN | `GET /` (фильтр `status`, поиск по номеру/телефону/имени), `GET /:id`, `PATCH /:id/status`, `PATCH /:id/courier` |
+| `admin/orders` | SELLER, SUPER_ADMIN | `GET /` — группы (фильтр `status`, поиск по номеру группы/заказа/телефону/имени), `GET /:id` (`:id` — id группы), `PATCH /:orderId/status`, `PATCH /:orderId/courier` (`:orderId` — id заказа внутри группы) — **только `SUPER_ADMIN`** |
 | `admin/sellers` | SUPER_ADMIN | CRUD + `POST /:id/image` (баннер) |
 | `admin/sellers/:sellerId/staff` | SUPER_ADMIN, **владелец** | `GET /`, `POST /`, `PATCH /:staffId`, `DELETE /:staffId`, `POST /:staffId/telegram/invite`, `POST /:staffId/telegram/unlink` |
 | `admin/metrics` | SUPER_ADMIN | `GET users`, `GET orders`, `GET catalog`, `GET overview` |
+| `admin/settings` | SUPER_ADMIN | `GET /`, `PATCH /` — тариф доставки/порог бесплатной доставки |
 
 `SELLER` жёстко скоупится своим `sellerId`; его query-параметр `sellerId` игнорируется.
 
@@ -147,8 +173,9 @@ src/
 | `mobile/catalog` | JwtAuthGuard | `GET /` — ⚠️ асимметрия: остальная витрина публичная |
 | `mobile/cart` | JwtAuthGuard | `GET /`, `POST items`, `PATCH/DELETE items/:id`, `DELETE /` |
 | `mobile/addresses` | JwtAuthGuard | CRUD, всё scoped по `userId` |
-| `mobile/orders` | JwtAuthGuard | `POST /`, `GET /`, `GET /:id`, `POST /:id/cancel` |
+| `mobile/order-groups` | JwtAuthGuard | `POST /`, `GET /`, `GET /:id`, `POST /:id/cancel` |
 | `mobile/notifications` | JwtAuthGuard | `GET /`, `POST read` |
+| `mobile/settings` | **публичный** | `GET /` — `{ deliveryFee, freeDeliveryThreshold }`, как остальная витрина |
 
 Плюс `GET /health` и вебхуки `POST /telegram/webhook` (основной бот) и
 `POST /telegram/webhook/seller` (бот продавца) — без гварда, каждый сверяет свой секрет в
@@ -160,9 +187,11 @@ src/
 
 ## Заказы
 
-**Один checkout = N заказов.** Корзина может содержать листинги разных продавцов, поэтому
-`createFromCart` режет её по `sellerId`: каждому свой `Order` со своим статусом, все связаны
-`groupId` (`randomUUID`).
+**Один checkout = одна `OrderGroup` + N заказов.** Корзина может содержать листинги разных
+продавцов, поэтому `createFromCart` сперва создаёт `OrderGroup` (контакты, адрес, оплата,
+общий итог), затем режет корзину по `sellerId`: каждому свой `Order` со своим статусом,
+`groupId` — FK на эту группу. Эндпоинт `POST /mobile/order-groups` отдаёт группу целиком
+(`OrderGroupResponse`, вложенные `orders`), а не массив заказов.
 
 **Гонка за остатком.** Списание — условным апдейтом внутри транзакции:
 `updateMany({ where: { id, stock: { gte: qty } }, data: { stock: { decrement: qty } } })`,
@@ -171,8 +200,22 @@ src/
 в `TelegramAuthService.poll`.
 
 **Статусы — `src/orders/order-status.ts`.** `ALLOWED_TRANSITIONS` — **единственный источник
-правды**: из неё валидируется `PATCH /admin/orders/:id/status`, строятся inline-кнопки бота и
+правды**: из неё валидируется `PATCH /admin/orders/:orderId/status` (только `SUPER_ADMIN`) и
 селект в админке. Дублировать нельзя. Там же подписи статусов/кнопок и тексты покупателю.
+
+**Админка листает группы, не заказы.** `GET /admin/orders` и `GET /admin/orders/:id` отдают
+`OrderGroupResponse` (группа — корень, `orders: OrderResponse[]` — без обратной ссылки на
+группу, циклов нет). `SELLER` получает группы, где участвует, но внутри — только свои `orders`
+(изоляция — в `where` на уровне `orders` при запросе, не постфактум фильтрацией ответа), и
+суммы группы (`itemsTotal`/`deliveryFee`/`total`) пересчитаны по видимому
+(`toSellerOrderGroupResponse`) — иначе он видел бы оборот соседа по группе. Статус и курьера
+меняет только `SUPER_ADMIN`: `PATCH /admin/orders/:orderId/status|courier` берёт id
+конкретного `Order` внутри группы, но отдаёт группу целиком — деталка в админке заменяет своё
+состояние одним объектом. Мобилка листает те же группы через `mobile-order-groups.controller.ts`
+(`POST/GET /mobile/order-groups`, `GET /:id`, `POST /:id/cancel`) — покупателю заказ **это**
+группа, плоских `Order` в ответе нет нигде. Старых `/mobile/orders` (заказ с вложенной группой)
+больше не существует: установки из Play, оставшиеся на прежней версии приложения, перестают
+работать до обновления — решение принято осознанно, экрана «обновите приложение» нет.
 
 ```
 NEW → CONFIRMED → ASSEMBLING → DELIVERING → ARRIVED → DELIVERED
@@ -186,15 +229,21 @@ NEW → CONFIRMED → ASSEMBLING → DELIVERING → ARRIVED → DELIVERED
 `AddressesService.findOwned`), либо сырые поля — и в этой ветке `deliveryLat`/`deliveryLng`
 **обязательны**: точку даёт Яндекс-пикер на клиенте, гео-API на бэкенде нет. Флаг
 `saveAddress` (только с сырыми полями) кладёт `SavedAddress` в ту же `$transaction`. Адрес
-резолвится **один раз на весь checkout** и копируется во все N заказов. Курьеру уходит текст +
-нативная карточка локации Telegram — у неё встроенная кнопка «Маршрут» в Яндекс/Google Картах.
-Модели курьера нет: `courierName`/`courierPhone` — задел, продавец пересылает карточку сам
-(пересылка сохраняет геоточку).
+резолвится **один раз на весь checkout** и кладётся в `OrderGroup` (не копируется в каждый
+`Order`). Курьеру уходит текст + нативная карточка локации Telegram — у неё встроенная кнопка
+«Маршрут» в Яндекс/Google Картах. Модели курьера нет: `courierName`/`courierPhone` (на
+`Order`) — задел, продавец пересылает карточку сам (пересылка сохраняет геоточку).
 
-**Деньги.** `deliveryFee` всегда `0` и нигде не считается (тарифов нет), `total = itemsTotal`.
-Оплата только `CASH`, поэтому `paymentMethod` в `CreateOrderDto` отсутствует. Payme/Click —
-добавлением значений в енам; `providerTxnId`/`providerPayload` нет намеренно: у провайдера на
-заказ бывает несколько попыток, это будущая модель `Payment`.
+**Деньги.** Доставка платформенная и считается **один раз на весь чекаут** —
+`SettingsService.quote(itemsTotal, { allFreeDelivery })` (`src/settings/settings.service.ts`,
+единственное место с формулой доставки), результат снапшотится в `OrderGroup.deliveryFee/total`
+при оформлении. `Order.itemsTotal` — доля конкретного продавца, без доставки. Бесплатно, если
+сумма товаров достигла `PlatformSettings.freeDeliveryThreshold` **или** вся корзина состоит из
+позиций с `CatalogItem.freeDelivery` (смешанная корзина — платная, иначе один дешёвый
+«бесплатный» товар открывал бы бесплатную доставку на всё). Оплата только `CASH`, поэтому
+`paymentMethod` в `CreateOrderDto` отсутствует, бэкенд ставит его сам на `OrderGroup`.
+Payme/Click — добавлением значений в енам; `providerTxnId`/`providerPayload` нет намеренно: у
+провайдера на заказ бывает несколько попыток, это будущая модель `Payment`.
 
 **После коммита**, в этом порядке: `cache.bump()` → бэкфилл телефона/имени → уведомление продавцу.
 
@@ -206,7 +255,34 @@ NEW → CONFIRMED → ASSEMBLING → DELIVERING → ARRIVED → DELIVERED
 заказ, отмена покупателем, по `staffTelegramId`) и покупателю в основной бот (по `telegramId`;
 мягкий канал: нет токена или id — тихий no-op).
 
-⚠️ **Push и Telegram-DM покупателю взаимоисключающие.** `statusChanged` сначала пробует
+⚠️ **Покупателя уведомляет ГРУППА, а не `Order`** — все три канала. Единица уведомления та же,
+что единица заказа в мобилке: плоских `/mobile/orders` нет, и каскад `changeGroupStatus` по трём
+продавцам обязан дать **одно** сообщение «заказ едет», а не три с разными `orderNumber`.
+`OrderNotifier.groupStatusChanged(group, { feedOnly? })` шлёт лента+push+Telegram, тексты —
+`CUSTOMER_GROUP_STATUS_MESSAGES` (`src/orders/order-status.ts`, ключуется `OrderGroupStatus`,
+поэтому есть и `PARTIALLY_DELIVERED`; `NEW` не шлётся — покупатель сам только что оформил).
+Заголовок и DM — `Заказ №<groupNumber>` (`№` = группа, `#` = `Order`, как в карточках бота).
+
+⚠️ Условие отправки — **реальная смена выведенного статуса группы**, тот же инвариант, что у
+`OrderGroupStatusHistory`. Проверку делает `OrdersService`, а не нотифаер: сравнивается
+`OrderGroup.status` **до** операции и **после коммита** (`changeStatus`, `changeGroupStatus`,
+`cancelMyGroup`). Флаг из `applyStatusTx` наружу не тащится — сравнение «до/после» схлопывает
+каскад по N заказам в одну дельту само. Смена одного `Order`, не сдвинувшая
+`deriveGroupStatus` (сосед позади), уведомления не даёт вовсе.
+
+⚠️ **Самоотмена — `feedOnly`.** `cancelMyGroup` пишет строку в ленту (история должна быть
+полной), но push и DM покупателю не шлёт: это уведомление человека о его же нажатии секунду
+назад. Продавцам `cancelledByCustomer` уходит по-прежнему — и только по заказам, отменённым
+**этой** операцией, а не по всем в группе.
+
+Payload ленты и `data` пуша: `{ groupId, groupNumber, status }` под типом
+`NotificationType.ORDER_GROUP_STATUS_CHANGED`. Старое значение `ORDER_STATUS_CHANGED`
+(`{ orderId, orderNumber, status }`) осталось в енаме ради уже накопленных строк, но больше не
+эмитится, поэтому **бутстрап-страница ленты бывает смешанной** — клиент обязан игнорировать
+незнакомый `type`, а не падать на нём. `orderId` там указывал на сущность, которую мобилка
+запросить не может: эндпоинта по одному `Order` в мобильном API нет.
+
+⚠️ **Push и Telegram-DM покупателю взаимоисключающие.** `groupStatusChanged` сначала пробует
 `PushService.sendToUser`, и только если тот вернул `false` (нет живых токенов либо Expo
 недоступен) — шлёт сообщение в бот. Иначе юзер с приложением и ботом получал бы два
 уведомления об одном событии. Telegram-канал никуда не девается: в Mini App и вебе пушей нет
@@ -218,7 +294,7 @@ upsert **по самому токену**, а не по паре с `userId`: т
 входа другого юзера на том же устройстве строка обязана переехать к нему, иначе пуши уйдут
 прошлому владельцу). `PushService` — отправка через `expo-server-sdk` с двумя проходами
 чистки битых токенов: тикеты сразу + receipts через 15 секунд (`DeviceNotRegistered` = снесли
-приложение). Тексты берутся из `CUSTOMER_STATUS_MESSAGES` — того же источника, что Telegram-DM;
+приложение). Тексты берутся из `CUSTOMER_GROUP_STATUS_MESSAGES` — того же источника, что Telegram-DM;
 это осознанное отступление от правила «текст живёт на клиенте», потому что тело пуша рендерит
 ОС, а клиента в этот момент нет. `EXPO_ACCESS_TOKEN` опционален (пусто = как пустой
 `TELEGRAM_BOT_TOKEN`).
@@ -228,9 +304,7 @@ upsert **по самому токену**, а не по паре с `userId`: т
 случай пустого `sellerId` у него) и непривязанных отсеивает по `staffTelegramId != null`.
 Рассылка идёт через `fanOut`, у которого **try/catch на каждого адресата**: заблокировавший
 бота сотрудник не должен лишать уведомления остальных. Пустой список — warning в лог, заказ
-живёт в админке. Карточки между сотрудниками не синхронизируются: у того, кто не нажимал,
-останется старая клавиатура, но нажатие устаревшей кнопки безопасно — `changeStatus` валидирует
-переход по `ALLOWED_TRANSITIONS`.
+живёт в админке.
 
 `GET /mobile/notifications?after&limit` → `{ items, cursor, unreadCount }`;
 `POST …/read` (`ids?`, без них — все; ownership обеспечивает скоуп по `userId`, id от клиента
@@ -274,15 +348,17 @@ URL продавца производный: `${TELEGRAM_WEBHOOK_URL}/seller` �
 одну переменную с почти тем же значением.
 
 **Кабинет продавца — без Mini App**, на inline-клавиатурах: активные заказы, «в доставке»,
-карточка заказа с кнопками следующих статусов и URL-кнопкой «Открыть в админке» (`ADMIN_URL`).
-`/start` без payload от не-продавца — подсказка «вам в @<основной бот>». Кабинет одинаков для
-всей команды: `resolveSeller` ищет юзера по `staffTelegramId` и требует лишь роль + `sellerId`,
-поэтому сотрудник получает его без единой правки в композере.
+карточка заказа и URL-кнопкой «Открыть в админке» (`ADMIN_URL`). Кабинет **read-only**:
+кнопок статусов у карточки нет, колбэк `ord:<id>:<status>` убран вместе с ними — статус меняет
+только `SUPER_ADMIN` из админки, иначе запрет обходился бы в два клика через бота. Старые
+кнопки в истории чата (если остались с прошлой версии) просто не находят обработчик — grammy
+их молча игнорирует. `/start` без payload от не-продавца — подсказка «вам в @<основной бот>».
+Кабинет одинаков для всей команды: `resolveSeller` ищет юзера по `staffTelegramId` и требует
+лишь роль + `sellerId`, поэтому сотрудник получает его без единой правки в композере.
 
 > **`callback_data` — данные от клиента:** её можно подделать или нажать кнопку из
 > пересланного сообщения. Поэтому роль и принадлежность заказа проверяются заново на **каждый**
-> колбэк, а смена статуса идёт строго через `OrdersService.changeStatus` (валидация перехода,
-> история, возврат остатка). Прямых `prisma.update` в композере нет.
+> колбэк (`sel:list:*`, `sel:show:*`) — хотя менять тут всё равно нечего, кабинет только читает.
 
 **Привязка продавца.** В админку он входит по email/паролю, `staffTelegramId` обычно `null`.
 `POST /admin/auth/telegram/link` → `BotLinkSession(SELLER_LINK)` → ссылка/QR на
@@ -383,9 +459,10 @@ Data Safety.
 намеренно: заказы обязаны пережить уход покупателя ради отчётности продавца. Поэтому в одной
 транзакции: удаляются `savedAddresses`/`cartItems`/`notifications`/`refreshTokens`/`pushTokens`
 и незавершённые сессии входа (`telegramAuthSession`/`botLinkSession`/`phoneAuthSession` — живая
-сессия иначе восстановила бы привязку), в заказах затирается снапшот
-(`contactName` → «Удалённый пользователь», `contactPhone`/`deliveryAddress` → пусто,
-`deliveryComment`/`deliveryLat`/`deliveryLng` → null), а у юзера обнуляются
+сессия иначе восстановила бы привязку), в группах заказов (`OrderGroup`, не `Order` — снапшот
+переехал туда) затирается контактный снапшот (`contactName` → «Удалённый пользователь»,
+`contactPhone`/`deliveryAddress` → пусто, `deliveryComment`/`deliveryLat`/`deliveryLng` →
+null), а у юзера обнуляются
 `telegramId`/`staffTelegramId`/`phone`/`email`/`name`/`passwordHash` и ставится `deletedAt`.
 Эти колонки nullable+unique, поэтому обнуление **освобождает** их: повторный вход по тому же
 номеру создаст новую учётку.
@@ -425,7 +502,7 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 недостижимы и истекают сами, без SCAN/DEL.
 
 - Кэшируется **только публичная витрина** (`listings`, `listing`, `categories`, `catalog`,
-  `seller`); админские списки — никогда. Пустой `REDIS_URL` → кэш выключен.
+  `seller`, `settings`); админские списки — никогда. Пустой `REDIS_URL` → кэш выключен.
 - Fail-open: любая ошибка Redis = промах. `enableOfflineQueue: false`, `family: 0`
   (IPv6-DNS Railway), лог ошибок троттлится до 1/мин.
 - Исключения из `fn` не кэшируются. Значения ходят через JSON, поэтому `Date` возвращается
@@ -505,6 +582,11 @@ Buckets приватные и публичных URL не дают, а ссыл�
   в листинге (403);
 - заказ на количество больше `stock` не проходит; отмена возвращает остаток;
 - после мутации каталога витрина сразу отдаёт свежие данные (значит `bump()` не забыт);
+- уведомления покупателя считаются по группе: чекаут у двух продавцов, переведённый в
+  `CONFIRMED` целиком, даёт **одну** строку в `/mobile/notifications` (`ORDER_GROUP_STATUS_CHANGED`,
+  `{ groupId, groupNumber, status }`) и **один** пуш; смена статуса одного заказа, не сдвинувшая
+  `deriveGroupStatus`, не даёт ничего; повторный `PATCH …/group-status` тем же статусом — тоже;
+  самоотмена пишет строку в ленту, но не шлёт покупателю ни пуша, ни сообщения в бот;
 - вход по номеру: чужой пересланный контакт и контакт с другим номером → отказ (`mismatch`),
   верный код логинит, повтор того же `phone/verify` → 401, 6 сессий на номер за 15 мин → 429;
 - с заданными `TEST_LOGIN_PHONE`/`TEST_LOGIN_OTP` вход по тест-номеру проходит **не открывая

@@ -5,7 +5,12 @@ import { StorageService } from './storage.service';
 import { VideoService } from './video.service';
 
 @Module({
-  providers: [StorageService, ImageService, VideoService, MediaProcessingService],
+  providers: [
+    StorageService,
+    ImageService,
+    VideoService,
+    MediaProcessingService,
+  ],
   exports: [StorageService, ImageService, VideoService, MediaProcessingService],
 })
 export class StorageModule {}
