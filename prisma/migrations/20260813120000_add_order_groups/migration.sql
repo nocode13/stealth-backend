@@ -51,15 +51,25 @@ ALTER TABLE "order_groups" ADD CONSTRAINT "order_groups_savedAddressId_fkey" FOR
 -- карта одна на двоих, расхождение читалось бы как баг. На проде все заказы одного
 -- продавца, поэтому агрегаты берут единственную строку; SQL написан на общий случай
 -- сознательно, для будущих мультипродавцовых групп.
+--
+-- ⚠️ "groupNumber" проставляется ЗДЕСЬ, окном по хронологии, а не дефолтом SERIAL с
+-- перенумерацией вторым UPDATE: индекс "order_groups_groupNumber_key" не DEFERRABLE, и
+-- апдейт, переставляющий уже занятые номера местами, ловит duplicate key прямо посреди
+-- statement'а (проверка уникальности идёт построчно). Номер выдаётся ровно один раз.
+--
+-- Агрегаты снапшота берут строку через явный ORDER BY внутри array_agg: ORDER BY в
+-- подзапросе GROUP BY не переживает (hash aggregate переставляет строки как хочет), так
+-- что без него «первый заказ группы» был бы случайным.
 INSERT INTO "order_groups" (
-  id, "userId", status, "paymentMethod", "paymentStatus",
+  id, "groupNumber", "userId", status, "paymentMethod", "paymentStatus",
   "contactName", "contactPhone", "deliveryAddress", "deliveryComment",
   "deliveryLat", "deliveryLng", "savedAddressId",
   "itemsTotal", "deliveryFee", total, "createdAt", "updatedAt"
 )
 SELECT
   o."groupId",
-  (array_agg(o."userId"))[1],
+  row_number() OVER (ORDER BY MIN(o."createdAt"), o."groupId"),
+  (array_agg(o."userId" ORDER BY o."createdAt", o.id))[1],
   CASE
     WHEN bool_and(o.status = 'CANCELLED') THEN 'CANCELLED'
     WHEN bool_and(o.status = 'DELIVERED') THEN 'DELIVERED'
@@ -72,20 +82,22 @@ SELECT
     WHEN bool_or(o.status = 'DELIVERING') THEN 'DELIVERING'
     ELSE 'ARRIVED'
   END::"OrderGroupStatus",
-  (array_agg(o."paymentMethod"))[1], (array_agg(o."paymentStatus"))[1],
-  (array_agg(o."contactName"))[1],   (array_agg(o."contactPhone"))[1],
-  (array_agg(o."deliveryAddress"))[1], (array_agg(o."deliveryComment"))[1],
-  (array_agg(o."deliveryLat"))[1],   (array_agg(o."deliveryLng"))[1],
-  (array_agg(o."savedAddressId"))[1],
+  (array_agg(o."paymentMethod"    ORDER BY o."createdAt", o.id))[1],
+  (array_agg(o."paymentStatus"    ORDER BY o."createdAt", o.id))[1],
+  (array_agg(o."contactName"      ORDER BY o."createdAt", o.id))[1],
+  (array_agg(o."contactPhone"     ORDER BY o."createdAt", o.id))[1],
+  (array_agg(o."deliveryAddress"  ORDER BY o."createdAt", o.id))[1],
+  (array_agg(o."deliveryComment"  ORDER BY o."createdAt", o.id))[1],
+  (array_agg(o."deliveryLat"      ORDER BY o."createdAt", o.id))[1],
+  (array_agg(o."deliveryLng"      ORDER BY o."createdAt", o.id))[1],
+  (array_agg(o."savedAddressId"   ORDER BY o."createdAt", o.id))[1],
   SUM(o."itemsTotal"), 0, SUM(o.total),
   MIN(o."createdAt"), MAX(o."updatedAt")
-FROM (SELECT * FROM "orders" ORDER BY "createdAt", id) o
+FROM "orders" o
 GROUP BY o."groupId";
 
--- Раздать groupNumber по хронологии и подвинуть счётчик за максимум.
-WITH n AS (SELECT id, row_number() OVER (ORDER BY "createdAt", id) AS rn FROM "order_groups")
-UPDATE "order_groups" g SET "groupNumber" = n.rn FROM n WHERE n.id = g.id;
-
+-- Подвинуть счётчик за максимум: номера выданы явно, дефолт SERIAL не расходовался,
+-- и без setval первый новый чекаут получил бы "groupNumber" = 1.
 SELECT setval('"order_groups_groupNumber_seq"', COALESCE((SELECT MAX("groupNumber") FROM "order_groups"), 0) + 1, false);
 
 -- AddForeignKey: orders.groupId становится настоящим FK на order_groups.
