@@ -3,6 +3,7 @@ import { TelegramNotifyModule } from '../telegram/telegram-notify.module';
 import { AddressesModule } from '../addresses/addresses.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PushModule } from '../push/push.module';
+import { SettingsModule } from '../settings/settings.module';
 import { OrderNotifier } from './order-notifier.service';
 import { OrdersService } from './orders.service';
 
@@ -13,13 +14,15 @@ import { OrdersService } from './orders.service';
 // NotificationsModule — второй канал уведомления покупателя (in-app лента); цикла не
 // создаёт, т.к. NotificationsService не знает ни о заказах, ни о Telegram.
 // PushModule — третий канал (нативные пуши), тоже без зависимостей, как
-// TelegramNotifyModule.
+// TelegramNotifyModule. SettingsModule — тариф доставки для createFromCart
+// (SettingsService.quote), платформенная доставка считается один раз на чекаут.
 @Module({
   imports: [
     TelegramNotifyModule,
     AddressesModule,
     NotificationsModule,
     PushModule,
+    SettingsModule,
   ],
   providers: [OrdersService, OrderNotifier],
   exports: [OrdersService, OrderNotifier],

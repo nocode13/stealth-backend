@@ -62,7 +62,7 @@ export class SellersService {
   // Продавца заводит только SUPER_ADMIN. Владелец — новый User(role: SELLER),
   // логинится в админку по email+паролю, как и остальной staff. sellerId владельцу
   // проставляется вторым шагом: Seller.ownerUserId для него ещё не существует,
-  // пока сам продавец не создан, а весь остальной код (staffScope в заказах,
+  // пока сам продавец не создан, а весь остальной код (groupStaffScope в заказах,
   // видимость категорий/каталога) скоупит SELLER именно по User.sellerId.
   async create(dto: CreateSellerDto): Promise<Seller> {
     try {

@@ -1,16 +1,18 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Role, type OrderStatus } from '@prisma/client';
 import { InlineKeyboard } from 'grammy';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramNotifyService } from '../telegram/telegram-notify.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PushService } from '../push/push.service';
-import type { OrderWithDetails } from './orders.service';
+import type { OrderGroupWithOrders, OrderWithDetails } from './orders.service';
 import {
   ALLOWED_TRANSITIONS,
   CUSTOMER_STATUS_MESSAGES,
   ORDER_ACTION_LABELS,
   ORDER_STATUS_LABELS,
+  isTerminal,
 } from './order-status';
 
 // Значения приходят в тиинах (1 сум = 100 тиинов) — делим на 100 перед показом.
@@ -44,16 +46,31 @@ export class OrderNotifier {
   }
 
   /**
-   * Карточка заказа для продавца/курьера: состав, контакты, адрес и кнопки
-   * следующих шагов. Кнопки строятся из ALLOWED_TRANSITIONS — того же источника,
-   * что валидирует OrdersService.changeStatus, поэтому бот и админка не разъезжаются.
+   * Карточка заказа для продавца/курьера: состав, контакты, адрес и ссылка на
+   * админку. Кнопок статусов у карточки больше нет — статус меняет только
+   * SUPER_ADMIN из админки (см. AGENTS.md «Заказы»), кабинет продавца в боте
+   * read-only.
    */
-  buildSellerCard(order: OrderWithDetails): {
+  async buildSellerCard(order: OrderWithDetails): Promise<{
     text: string;
     keyboard: InlineKeyboard;
-  } {
+  }> {
+    // Заказ из мультипродавцового чекаута — продавец должен понимать, что
+    // покупатель ждёт ещё коробку от соседа по группе.
+    const siblings = await this.prisma.order.findMany({
+      where: { groupId: order.groupId },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const partIndex = siblings.findIndex((s) => s.id === order.id) + 1;
+
     const lines = [
       `<b>Заказ #${order.orderNumber}</b> — ${ORDER_STATUS_LABELS[order.status]}`,
+      ...(siblings.length > 1
+        ? [
+            `Заказ №${order.group.groupNumber}, часть ${partIndex} из ${siblings.length}`,
+          ]
+        : []),
       '',
       ...order.items.map(
         (item) =>
@@ -62,22 +79,21 @@ export class OrderNotifier {
           )} × ${money(item.price)} = ${money(item.total)}`,
       ),
       '',
-      `<b>Итого: ${money(order.total)}</b>`,
+      `<b>Итого: ${money(order.itemsTotal)}</b>`,
       `Оплата: наличными курьеру`,
       '',
-      `👤 ${escapeHtml(order.contactName)}`,
-      `📞 ${escapeHtml(order.contactPhone)}`,
-      `📍 ${escapeHtml(order.deliveryAddress)}`,
-      ...(order.deliveryComment
-        ? [`💬 ${escapeHtml(order.deliveryComment)}`]
+      `👤 ${escapeHtml(order.group.contactName)}`,
+      `📞 ${escapeHtml(order.group.contactPhone)}`,
+      `📍 ${escapeHtml(order.group.deliveryAddress)}`,
+      ...(order.group.deliveryComment
+        ? [`💬 ${escapeHtml(order.group.deliveryComment)}`]
         : []),
     ];
 
-    const keyboard = new InlineKeyboard();
-    for (const next of ALLOWED_TRANSITIONS[order.status]) {
-      keyboard.text(ORDER_ACTION_LABELS[next], `ord:${order.id}:${next}`).row();
-    }
-    keyboard.url('🖥 Открыть в админке', this.adminOrderUrl(order.id));
+    const keyboard = new InlineKeyboard().url(
+      '🖥 Открыть в админке',
+      this.adminOrderUrl(order.id),
+    );
 
     return { text: lines.join('\n'), keyboard };
   }
@@ -93,18 +109,21 @@ export class OrderNotifier {
           );
           continue;
         }
-        const { text, keyboard } = this.buildSellerCard(order);
+        const { text, keyboard } = await this.buildSellerCard(order);
         await this.fanOut(recipients, async (staffTelegramId) => {
           await this.telegram.sendToSeller(
             staffTelegramId,
             `🆕 <b>Новый заказ!</b>\n\n${text}`,
             keyboard,
           );
-          if (order.deliveryLat != null && order.deliveryLng != null) {
+          if (
+            order.group.deliveryLat != null &&
+            order.group.deliveryLng != null
+          ) {
             await this.telegram.sendLocationToSeller(
               staffTelegramId,
-              order.deliveryLat,
-              order.deliveryLng,
+              order.group.deliveryLat,
+              order.group.deliveryLng,
             );
           }
         });
@@ -113,6 +132,93 @@ export class OrderNotifier {
           `Уведомление о заказе #${order.orderNumber} не ушло: ${(error as Error).message}`,
         );
       }
+    }
+  }
+
+  /**
+   * Карточка ГРУППЫ целиком для SUPER_ADMIN: по блоку на каждый Order (продавец,
+   * состав, статус), общие контакты/адрес/итог. Кнопки статуса — пересечение
+   * ALLOWED_TRANSITIONS по всем нетерминальным заказам группы (сразу после
+   * создания это просто переходы из NEW), callback_data вида `grp:<id>:<status>`
+   * — читает и валидирует его superadmin-orders.composer.ts, здесь только текст.
+   */
+  buildSuperAdminGroupCard(group: OrderGroupWithOrders): {
+    text: string;
+    keyboard: InlineKeyboard;
+  } {
+    const lines = [
+      `<b>Группа №${group.groupNumber}</b>`,
+      '',
+      ...group.orders.flatMap((order) => [
+        `<b>${escapeHtml(order.seller.name)}</b> — ${ORDER_STATUS_LABELS[order.status]}`,
+        ...order.items.map(
+          (item) =>
+            `• ${escapeHtml(item.catalogItemName)} — ${item.quantity} ${escapeHtml(
+              item.unit,
+            )} × ${money(item.price)} = ${money(item.total)}`,
+        ),
+        `Сумма: ${money(order.itemsTotal)}`,
+        '',
+      ]),
+      `<b>Итого по группе: ${money(group.total)}</b>`,
+      `Оплата: наличными курьеру`,
+      '',
+      `👤 ${escapeHtml(group.contactName)}`,
+      `📞 ${escapeHtml(group.contactPhone)}`,
+      `📍 ${escapeHtml(group.deliveryAddress)}`,
+      ...(group.deliveryComment
+        ? [`💬 ${escapeHtml(group.deliveryComment)}`]
+        : []),
+    ];
+
+    const keyboard = new InlineKeyboard();
+    const nonTerminal = group.orders.filter((o) => !isTerminal(o.status));
+    if (nonTerminal.length > 0) {
+      const candidates = nonTerminal.reduce<OrderStatus[]>(
+        (acc, order) =>
+          acc.filter((s) => ALLOWED_TRANSITIONS[order.status].includes(s)),
+        ALLOWED_TRANSITIONS[nonTerminal[0].status],
+      );
+      for (const status of candidates) {
+        keyboard
+          .text(ORDER_ACTION_LABELS[status], `grp:${group.id}:${status}`)
+          .row();
+      }
+    }
+    keyboard.url('🖥 Открыть в админке', this.adminOrderUrl(group.id));
+
+    return { text: lines.join('\n'), keyboard };
+  }
+
+  /**
+   * Новая ГРУППА → сводная карточка на весь чекаут всем SUPER_ADMIN с привязанным
+   * Telegram (в отличие от orderCreated — там по карточке на Order команде
+   * конкретного продавца). Чисто аддитивно, командам продавцов ничего не меняет.
+   */
+  async groupCreatedForSuperAdmins(group: OrderGroupWithOrders): Promise<void> {
+    try {
+      const recipients = await this.superAdminTelegramIds();
+      if (recipients.length === 0) return;
+
+      const { text, keyboard } = this.buildSuperAdminGroupCard(group);
+      await this.fanOut(recipients, async (staffTelegramId) => {
+        await this.telegram.sendToSeller(
+          staffTelegramId,
+          `🆕 <b>Новый заказ!</b>\n\n${text}`,
+          keyboard,
+        );
+        if (group.deliveryLat != null && group.deliveryLng != null) {
+          await this.telegram.sendLocationToSeller(
+            staffTelegramId,
+            group.deliveryLat,
+            group.deliveryLng,
+          );
+        }
+      });
+    } catch (error) {
+      this.logger.error(
+        `Сводное уведомление о группе №${group.groupNumber} не ушло: ${(error as Error).message}`,
+      );
     }
   }
 
@@ -204,6 +310,20 @@ export class OrderNotifier {
       select: { staffTelegramId: true },
     });
     return staff.map((s) => s.staffTelegramId as string);
+  }
+
+  /**
+   * Адреса SUPER_ADMIN с привязанным Telegram — платформенных, а не команды
+   * конкретного продавца, поэтому без sellerId-фильтра, в отличие от
+   * sellerTelegramIds выше. SUPER_ADMIN ходит в тот же бот продавца
+   * (staffTelegramId), отдельного бота для него нет.
+   */
+  private async superAdminTelegramIds(): Promise<string[]> {
+    const admins = await this.prisma.user.findMany({
+      where: { role: Role.SUPER_ADMIN, staffTelegramId: { not: null } },
+      select: { staffTelegramId: true },
+    });
+    return admins.map((a) => a.staffTelegramId as string);
   }
 
   /**

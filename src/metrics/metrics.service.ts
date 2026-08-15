@@ -71,18 +71,18 @@ export class MetricsService {
       this.prisma.order.aggregate({
         where: { createdAt, status: { not: OrderStatus.CANCELLED } },
         _count: true,
-        _sum: { total: true },
+        _sum: { itemsTotal: true },
       }),
       this.prisma.order.groupBy({
         by: ['status'],
         where: { createdAt },
         _count: true,
-        _sum: { total: true },
+        _sum: { itemsTotal: true },
       }),
     ]);
 
     const orderCount = aggregate._count;
-    const revenue = aggregate._sum.total ?? 0;
+    const revenue = aggregate._sum.itemsTotal ?? 0;
 
     return {
       orderCount,
@@ -91,7 +91,7 @@ export class MetricsService {
       byStatus: groups.map((g) => ({
         status: g.status,
         count: g._count,
-        total: g._sum.total ?? 0,
+        total: g._sum.itemsTotal ?? 0,
       })),
     };
   }
@@ -134,7 +134,7 @@ export class MetricsService {
         this.prisma.order.aggregate({
           where: { status: { not: OrderStatus.CANCELLED } },
           _count: true,
-          _sum: { total: true },
+          _sum: { itemsTotal: true },
         }),
         this.getCatalog(),
       ]);
@@ -148,7 +148,7 @@ export class MetricsService {
       allTime: {
         totalUsers,
         totalOrders: allOrders._count,
-        totalRevenue: allOrders._sum.total ?? 0,
+        totalRevenue: allOrders._sum.itemsTotal ?? 0,
         activeSellers: catalog.activeSellers,
         pendingCategories: catalog.pendingCategories,
         pendingCatalogItems: catalog.pendingCatalogItems,

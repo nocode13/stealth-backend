@@ -64,6 +64,23 @@ enum OrderStatus {
   CANCELLED // отменён (терминальный)
 }
 
+// Статус чекаута целиком. Повторяет OrderStatus плюс PARTIALLY_DELIVERED —
+// он возможен только у группы (часть продавцов довезла, часть ещё нет) и
+// поэтому в OrderStatus его нет.
+// ⚠️ Значение НЕ выставляется руками: deriveGroupStatus() считает его из статусов
+// заказов группы. Второй карты переходов не заводим — источник правды один,
+// ALLOWED_TRANSITIONS у Order.
+enum OrderGroupStatus {
+  NEW
+  CONFIRMED
+  ASSEMBLING
+  DELIVERING
+  ARRIVED
+  PARTIALLY_DELIVERED
+  DELIVERED
+  CANCELLED
+}
+
 // Пока единственный способ оплаты. Payme/Click добавляются значениями этого енама —
 // отдельная однострочная миграция, схема заказа при этом не меняется.
 enum PaymentMethod {
@@ -120,6 +137,7 @@ model User {
   refreshTokens   RefreshToken[]
   cartItems       CartItem[]
   orders          Order[]
+  orderGroups     OrderGroup[]
   savedAddresses  SavedAddress[]
   notifications   Notification[]
   pushTokens      PushToken[]
@@ -273,6 +291,9 @@ model CatalogItem {
   seller      Seller?            @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   status      ReviewStatus       @default(APPROVED)
   listings    Listing[]
+  /// Позиция из вайтлиста бесплатной доставки. Ставит только SUPER_ADMIN: флаг стоит
+  /// платформе денег. Корзина едет бесплатно, только если ВСЕ её позиции с этим флагом.
+  freeDelivery Boolean           @default(false)
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
 
@@ -281,6 +302,21 @@ model CatalogItem {
   @@index([categoryId])
   @@index([createdAt])
   @@map("catalog")
+}
+
+/// Настройки платформы — ровно одна строка (id = "default"). Отдельная модель, а не env:
+/// тариф меняет супер-админ из админки, без редеплоя.
+model PlatformSettings {
+  id String @id @default("default")
+
+  /// Стоимость доставки за чекаут, в тийинах. 0 = доставка бесплатная всегда.
+  deliveryFee Int @default(0)
+  /// Сумма товаров, с которой доставка бесплатна. null = бесплатной доставки нет.
+  freeDeliveryThreshold Int?
+
+  updatedAt DateTime @updatedAt
+
+  @@map("platform_settings")
 }
 
 // Медиа позиции каталога — фото И видео в одной таблице, много на одну позицию.
@@ -347,16 +383,63 @@ model CartItem {
   @@map("cart_items")
 }
 
+// Группа заказов одного чекаута — общие данные оформления (контакты, адрес, оплата,
+// итог) живут здесь ОДИН раз, а не копией в каждом Order. Один checkout с товарами
+// разных продавцов даёт одну OrderGroup и по одному Order на продавца.
+model OrderGroup {
+  id          String @id @default(cuid())
+  // Человекочитаемый номер чекаута — как Order.orderNumber, но на группу.
+  groupNumber Int    @unique @default(autoincrement())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  status OrderGroupStatus @default(NEW)
+
+  paymentMethod PaymentMethod @default(CASH)
+  paymentStatus PaymentStatus @default(PENDING)
+
+  // Снапшот на момент оформления — ровно то, что раньше дублировалось в каждом Order.
+  contactName  String
+  contactPhone String
+
+  deliveryAddress String
+  deliveryComment String?
+  deliveryLat     Float?
+  deliveryLng     Float?
+  savedAddressId  String?
+  savedAddress    SavedAddress? @relation(fields: [savedAddressId], references: [id], onDelete: SetNull)
+
+  // Итог по всему чекауту — доставка платформенная и считается один раз здесь,
+  // не на каждом Order (у него остаётся только itemsTotal, доля продавца).
+  itemsTotal  Int
+  deliveryFee Int @default(0)
+  total       Int
+
+  orders  Order[]
+  history OrderGroupStatusHistory[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("order_groups")
+}
+
 // Заказ — всегда на ОДНОГО продавца: один checkout с товарами разных продавцов
-// режется на несколько Order с общим groupId. Отдельной модели Checkout нет по той же
-// причине, что нет обёртки Cart над CartItem — сущность без собственных полей не нужна.
+// режется на несколько Order с общим groupId → OrderGroup. Отдельной модели Checkout
+// нет по той же причине, что нет обёртки Cart над CartItem — сущность без собственных
+// полей не нужна, а общие данные чекаута теперь и так живут в OrderGroup.
 //
-// Все деньги и контакты — снапшот на момент оформления: цена листинга и профиль
-// пользователя меняются, а заказ обязан остаться читаемым как есть.
+// Свои деньги — только itemsTotal (доля продавца), снапшот на момент оформления: цена
+// листинга меняется, а заказ обязан остаться читаемым как есть. Доставка на Order не
+// раскладывается — она платформенная и живёт целиком в OrderGroup.deliveryFee/total.
 model Order {
   id          String @id @default(cuid())
   // Общий ключ заказов одного оформления (несколько продавцов = несколько Order).
   groupId     String
+  group       OrderGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
   // Человекочитаемый номер для поддержки и для поиска в боте.
   orderNumber Int    @unique @default(autoincrement())
 
@@ -365,27 +448,11 @@ model Order {
   sellerId String
   seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Restrict)
 
-  status        OrderStatus   @default(NEW)
-  paymentMethod PaymentMethod @default(CASH)
-  paymentStatus PaymentStatus @default(PENDING)
+  status OrderStatus @default(NEW)
 
-  itemsTotal  Int
-  deliveryFee Int @default(0)
-  total       Int
-
-  contactName  String
-  contactPhone String
-
-  deliveryAddress String
-  deliveryComment String?
-  // Координаты из Telegram-локации. Необязательны: текстового адреса достаточно,
-  // но именно они дают курьеру кнопку «Маршрут» в карточке локации.
-  deliveryLat     Float?
-  deliveryLng     Float?
-  // Не источник правды для полей выше — только трейсинг «каким сохранённым адресом
-  // пользовались». Адрес можно отредактировать/удалить, снапшот заказа не меняется.
-  savedAddressId  String?
-  savedAddress    SavedAddress? @relation(fields: [savedAddressId], references: [id], onDelete: SetNull)
+  // Доставка — платформенная, считается один раз на чекаут (OrderGroup.deliveryFee/total).
+  // Доля продавца — только itemsTotal, разложения доставки на заказ нет намеренно.
+  itemsTotal Int
 
   // Задел под курьерскую систему: позже заменяется на courierId → модель Courier.
   courierName  String?
@@ -449,6 +516,26 @@ model OrderStatusHistory {
   @@map("order_status_history")
 }
 
+// Лог смен статуса ГРУППЫ — зеркало OrderStatusHistory, но пишется не при каждой
+// смене статуса Order, а только когда production deriveGroupStatus() (order-status.ts)
+// после неё даёт НОВОЕ значение (applyStatusTx в orders.service.ts). Иначе каскад по
+// нескольким заказам группы за одну операцию (changeGroupStatus, cancelMyGroup) плодил
+// бы по записи на каждый задетый заказ вместо одной осмысленной на реальный переход.
+model OrderGroupStatusHistory {
+  id      String     @id @default(cuid())
+  groupId String
+  group   OrderGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  status          OrderGroupStatus
+  comment         String?
+  changedByUserId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([groupId])
+  @@map("order_group_status_history")
+}
+
 // Адресная книга покупателя. Order на неё не полагается как на источник правды —
 // у Order всегда свой снапшот (deliveryAddress/deliveryComment/deliveryLat/deliveryLng),
 // эта модель только даёт переиспользовать адрес между заказами и подставлять его в checkout.
@@ -463,7 +550,7 @@ model SavedAddress {
   lat     Float?
   lng     Float?
 
-  orders Order[]
+  orderGroups OrderGroup[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

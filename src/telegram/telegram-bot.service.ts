@@ -10,6 +10,7 @@ import type { Context } from 'grammy';
 import type { Update } from 'grammy/types';
 import { CustomerComposer } from './handlers/customer.composer';
 import { SellerComposer } from './handlers/seller.composer';
+import { SuperAdminOrdersComposer } from './handlers/superadmin-orders.composer';
 
 /** Какой из двух ботов имеется в виду. */
 export type BotTarget = 'main' | 'seller';
@@ -37,6 +38,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly config: ConfigService,
     private readonly sellerComposer: SellerComposer,
+    private readonly superAdminOrdersComposer: SuperAdminOrdersComposer,
     private readonly customerComposer: CustomerComposer,
   ) {}
 
@@ -55,7 +57,13 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     this.bots.seller = await this.startBot({
       target: 'seller',
       token: this.config.get<string>('telegramSeller.botToken'),
-      composer: this.sellerComposer.build(),
+      // Кабинет продавца (read-only) и кнопки статуса группы для SUPER_ADMIN —
+      // два независимых композера на одном боте, ни один не знает о другом
+      // (см. комментарий в superadmin-orders.composer.ts).
+      composer: [
+        this.sellerComposer.build(),
+        this.superAdminOrdersComposer.build(),
+      ],
       // Вебхук продавца — производный от основного, чтобы на проде не заводить
       // ещё одну переменную с почти тем же значением.
       webhookUrl: webhookUrl ? `${webhookUrl}/seller` : undefined,
@@ -88,7 +96,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
   private async startBot(opts: {
     target: BotTarget;
     token?: string;
-    composer: Composer<Context>;
+    composer: Composer<Context> | Composer<Context>[];
     webhookUrl?: string;
     missingTokenWarning: string;
   }): Promise<Bot | undefined> {
@@ -99,7 +107,12 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     }
 
     const bot = new Bot(opts.token);
-    bot.use(opts.composer);
+    const composers = Array.isArray(opts.composer)
+      ? opts.composer
+      : [opts.composer];
+    for (const composer of composers) {
+      bot.use(composer);
+    }
     bot.catch((err) => {
       this.logger.error(
         `Ошибка в обработчике бота (${opts.target}): ${err.message}`,

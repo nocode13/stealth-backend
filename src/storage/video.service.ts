@@ -59,7 +59,9 @@ function run(
         resolve({ stdout: Buffer.concat(stdout), stderr });
         return;
       }
-      reject(new Error(`${bin} завершился с кодом ${code}: ${stderr.slice(-500)}`));
+      reject(
+        new Error(`${bin} завершился с кодом ${code}: ${stderr.slice(-500)}`),
+      );
     });
   });
 }
@@ -115,7 +117,10 @@ export class VideoService {
    * директорию: ffmpeg с `-movflags +faststart` переписывает начало файла в конце
    * работы, поэтому в pipe вывод не отдаётся — нужен именно файл на диске.
    */
-  async transcode(inputPath: string, probe: VideoProbe): Promise<TranscodedVideo> {
+  async transcode(
+    inputPath: string,
+    probe: VideoProbe,
+  ): Promise<TranscodedVideo> {
     const dir = await mkdtemp(join(tmpdir(), 'stealth-video-'));
     const outputPath = join(dir, 'out.mp4');
     try {

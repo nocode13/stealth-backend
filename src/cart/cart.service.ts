@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ListingStatus, MediaStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { SettingsService } from '../settings/settings.service';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 
 const withListing = {
@@ -32,12 +33,21 @@ type CartItemWithListing = Prisma.CartItemGetPayload<{
 export interface CartResponse {
   items: CartItemWithListing[];
   itemCount: number;
+  itemsTotal: number;
+  deliveryFee: number;
+  /** itemsTotal + deliveryFee — то, что заплатит покупатель. */
   total: number;
+  freeDeliveryThreshold: number | null;
+  amountUntilFreeDelivery: number;
+  freeByWhitelist: boolean;
 }
 
 @Injectable()
 export class CartService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly settings: SettingsService,
+  ) {}
 
   async getCart(userId: string): Promise<CartResponse> {
     const items = await this.prisma.cartItem.findMany({
@@ -115,12 +125,28 @@ export class CartService {
     return item;
   }
 
-  private toResponse(items: CartItemWithListing[]): CartResponse {
+  private async toResponse(
+    items: CartItemWithListing[],
+  ): Promise<CartResponse> {
     const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
-    const total = items.reduce(
+    const itemsTotal = items.reduce(
       (sum, item) => sum + item.listing.price * item.quantity,
       0,
     );
-    return { items, itemCount, total };
+    // Пустая корзина — не «бесплатная»: without items every() был бы vacuously true.
+    const allFreeDelivery =
+      items.length > 0 &&
+      items.every((i) => i.listing.catalogItem.freeDelivery);
+    const quote = await this.settings.quote(itemsTotal, { allFreeDelivery });
+    return {
+      items,
+      itemCount,
+      itemsTotal: quote.itemsTotal,
+      deliveryFee: quote.deliveryFee,
+      total: quote.total,
+      freeDeliveryThreshold: quote.freeDeliveryThreshold,
+      amountUntilFreeDelivery: quote.amountUntilFreeDelivery,
+      freeByWhitelist: quote.freeByWhitelist,
+    };
   }
 }
