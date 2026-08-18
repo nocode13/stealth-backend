@@ -26,6 +26,11 @@ export class SellersService {
     private readonly cache: CacheService,
   ) {}
 
+  // bannerUrl в БД хранится как ключ S3-объекта — здесь собираем полный URL для ответа.
+  private withUrl(seller: Seller): Seller {
+    return { ...seller, bannerUrl: this.storage.getUrlOrNull(seller.bannerUrl) };
+  }
+
   async findAll(query: FindSellersQueryDto): Promise<CursorPage<Seller>> {
     const rows = await this.prisma.seller.findMany({
       where: {
@@ -39,24 +44,26 @@ export class SellersService {
       skip: query.cursor ? 1 : 0,
       take: query.limit + 1,
     });
-    return toCursorPage(rows, query.limit);
+    const page = toCursorPage(rows, query.limit);
+    return { ...page, items: page.items.map((s) => this.withUrl(s)) };
   }
 
   async findOne(id: string): Promise<Seller> {
     const seller = await this.prisma.seller.findUnique({ where: { id } });
     if (!seller) throw new NotFoundException('Продавец не найден');
-    return seller;
+    return this.withUrl(seller);
   }
 
   // Витрина мобилки: только ACTIVE продавцы (SUSPENDED/PENDING не показываем).
   async findOnePublic(id: string): Promise<Seller> {
-    return this.cache.wrap('seller', id, async () => {
-      const seller = await this.prisma.seller.findUnique({
+    const seller = await this.cache.wrap('seller', id, async () => {
+      const found = await this.prisma.seller.findUnique({
         where: { id, status: SellerStatus.ACTIVE },
       });
-      if (!seller) throw new NotFoundException('Продавец не найден');
-      return seller;
+      if (!found) throw new NotFoundException('Продавец не найден');
+      return found;
     });
+    return this.withUrl(seller);
   }
 
   // Продавца заводит только SUPER_ADMIN. Владелец — новый User(role: SELLER),
@@ -90,7 +97,7 @@ export class SellersService {
         return seller;
       });
       await this.cache.bump();
-      return created;
+      return this.withUrl(created);
     } catch (e) {
       if (
         e instanceof Prisma.PrismaClientKnownRequestError &&
@@ -114,29 +121,27 @@ export class SellersService {
       data: dto,
     });
     await this.cache.bump();
-    return updated;
+    return this.withUrl(updated);
   }
 
-  async updateBanner(id: string, bannerUrl: string): Promise<Seller> {
+  async updateBanner(id: string, bannerKey: string): Promise<Seller> {
     const seller = await this.prisma.seller.findUnique({ where: { id } });
     if (!seller) {
       throw new NotFoundException('Продавец не найден');
     }
 
-    if (seller.bannerUrl) {
-      const oldKey = this.storage.keyFromUrl(seller.bannerUrl);
-      if (oldKey) {
-        this.storage.delete(oldKey).catch((e: unknown) => {
-          this.logger.warn(`Не удалось удалить старый баннер ${oldKey}`, e);
-        });
-      }
+    const oldBannerKey = seller.bannerUrl;
+    if (oldBannerKey) {
+      this.storage.delete(oldBannerKey).catch((e: unknown) => {
+        this.logger.warn(`Не удалось удалить старый баннер ${oldBannerKey}`, e);
+      });
     }
 
     const updated = await this.prisma.seller.update({
       where: { id },
-      data: { bannerUrl },
+      data: { bannerUrl: bannerKey },
     });
     await this.cache.bump();
-    return updated;
+    return this.withUrl(updated);
   }
 }

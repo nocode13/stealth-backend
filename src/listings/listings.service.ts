@@ -4,11 +4,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Listing, ListingStatus, MediaStatus, Prisma } from '@prisma/client';
+import { ListingStatus, MediaStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CatalogService } from '../catalog/catalog.service';
+import { withMediaUrls } from '../catalog/catalog-media.util';
 import { CacheService } from '../cache/cache.service';
+import { StorageService } from '../storage/storage.service';
 import {
   CreateListingDto,
   FindListingsQueryDto,
@@ -33,6 +35,8 @@ const withCatalog = {
   seller: { select: { id: true, name: true } },
 } satisfies Prisma.ListingInclude;
 
+export type Listing = Prisma.ListingGetPayload<{ include: typeof withCatalog }>;
+
 function buildPriceFilter(
   minPrice?: number,
   maxPrice?: number,
@@ -47,14 +51,22 @@ export class ListingsService {
     private readonly prisma: PrismaService,
     private readonly catalog: CatalogService,
     private readonly cache: CacheService,
+    private readonly storage: StorageService,
   ) {}
+
+  // catalogItem.media хранит ключи S3-объектов — здесь собираем полные URL для ответа.
+  // Кэш (findStorefront/findOnePublic) хранит сырые ключи: мэппинг применяется ПОСЛЕ
+  // cache.wrap(), как и в CatalogService.
+  private withUrls(listing: Listing): Listing {
+    return { ...listing, catalogItem: withMediaUrls(this.storage, listing.catalogItem) };
+  }
 
   // Витрина мобилки: только активные листинги. status из query игнорируется — тут
   // всегда ACTIVE + остаток > 0.
   async findStorefront(
     query: FindListingsQueryDto,
   ): Promise<CursorPage<Listing>> {
-    return this.cache.wrap('listings', query, async () => {
+    const page = await this.cache.wrap('listings', query, async () => {
       const rows = await this.prisma.listing.findMany({
         where: {
           status: ListingStatus.ACTIVE,
@@ -76,19 +88,21 @@ export class ListingsService {
       });
       return toCursorPage(rows, query.limit);
     });
+    return { ...page, items: page.items.map((l) => this.withUrls(l)) };
   }
 
   // Одно активное предложение для витрины мобилки (карточка товара).
   async findOnePublic(id: string): Promise<Listing> {
-    return this.cache.wrap('listing', id, async () => {
-      const listing = await this.prisma.listing.findFirst({
+    const listing = await this.cache.wrap('listing', id, async () => {
+      const found = await this.prisma.listing.findFirst({
         where: { id, status: ListingStatus.ACTIVE, stock: { gt: 0 } },
         include: withCatalog,
       });
       // Промах в БД не кешируется: исключение из колбэка wrap пробрасывает как есть.
-      if (!listing) throw new NotFoundException('Листинг не найден');
-      return listing;
+      if (!found) throw new NotFoundException('Листинг не найден');
+      return found;
     });
+    return this.withUrls(listing);
   }
 
   // Листинги конкретного продавца (админка). sellerId === null — SUPER_ADMIN
@@ -115,7 +129,8 @@ export class ListingsService {
       skip: query.cursor ? 1 : 0,
       take: query.limit + 1,
     });
-    return toCursorPage(rows, query.limit);
+    const page = toCursorPage(rows, query.limit);
+    return { ...page, items: page.items.map((l) => this.withUrls(l)) };
   }
 
   // sellerId === null — SUPER_ADMIN, проверку владения пропускаем.
@@ -131,7 +146,7 @@ export class ListingsService {
     if (sellerId !== null && listing.sellerId !== sellerId) {
       throw new ForbiddenException('Чужой листинг');
     }
-    return listing;
+    return this.withUrls(listing);
   }
 
   async create(sellerId: string, dto: CreateListingDto): Promise<Listing> {
@@ -146,7 +161,7 @@ export class ListingsService {
         include: withCatalog,
       });
       await this.cache.bump();
-      return listing;
+      return this.withUrls(listing);
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -172,7 +187,7 @@ export class ListingsService {
       include: withCatalog,
     });
     await this.cache.bump();
-    return listing;
+    return this.withUrls(listing);
   }
 
   async remove(id: string, sellerId: string | null): Promise<void> {

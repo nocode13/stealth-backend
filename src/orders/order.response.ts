@@ -4,6 +4,7 @@ import type {
   PaymentMethod,
   PaymentStatus,
 } from '@prisma/client';
+import type { StorageService } from '../storage/storage.service';
 import type { OrderGroupWithOrders, OrderWithDetails } from './orders.service';
 
 // Prisma отдаёт сущность как есть, а её колонки — не то же самое, что API-контракт:
@@ -75,7 +76,10 @@ export interface OrderGroupResponse {
   }[];
 }
 
-export const toOrderResponse = (o: OrderWithDetails): OrderResponse => ({
+export const toOrderResponse = (
+  o: OrderWithDetails,
+  storage: StorageService,
+): OrderResponse => ({
   id: o.id,
   orderNumber: o.orderNumber,
   status: o.status,
@@ -87,7 +91,7 @@ export const toOrderResponse = (o: OrderWithDetails): OrderResponse => ({
   items: o.items.map((item) => ({
     id: item.id,
     catalogItemName: item.catalogItemName,
-    catalogItemImageUrl: item.catalogItemImageUrl,
+    catalogItemImageUrl: storage.getUrlOrNull(item.catalogItemImageUrl),
     unit: item.unit,
     price: item.price,
     quantity: item.quantity,
@@ -106,6 +110,7 @@ export const toOrderResponse = (o: OrderWithDetails): OrderResponse => ({
 
 export const toOrderGroupResponse = (
   g: OrderGroupWithOrders,
+  storage: StorageService,
 ): OrderGroupResponse => ({
   id: g.id,
   groupNumber: g.groupNumber,
@@ -123,7 +128,7 @@ export const toOrderGroupResponse = (
   total: g.total,
   ordersCount: g.orders.length,
   createdAt: g.createdAt,
-  orders: g.orders.map(toOrderResponse),
+  orders: g.orders.map((o) => toOrderResponse(o, storage)),
   history: g.history.map((h) => ({
     id: h.id,
     status: h.status,
@@ -139,8 +144,9 @@ export const toOrderGroupResponse = (
  */
 export const toSellerOrderGroupResponse = (
   g: OrderGroupWithOrders,
+  storage: StorageService,
 ): OrderGroupResponse => {
-  const base = toOrderGroupResponse(g);
+  const base = toOrderGroupResponse(g, storage);
   const itemsTotal = base.orders.reduce((sum, o) => sum + o.itemsTotal, 0);
   return { ...base, itemsTotal, deliveryFee: 0, total: itemsTotal };
 };

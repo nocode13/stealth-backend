@@ -27,11 +27,7 @@ export class StorageService {
     });
   }
 
-  async upload(
-    key: string,
-    body: Buffer,
-    contentType: string,
-  ): Promise<string> {
+  async upload(key: string, body: Buffer, contentType: string): Promise<string> {
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,
@@ -40,18 +36,25 @@ export class StorageService {
         ContentType: contentType,
       }),
     );
-    // S3_PUBLIC_URL уже указывает на конкретный бакет: у R2 это публичный домен
-    // бакета, у MinIO — endpoint с именем бакета в пути. Поэтому bucket сюда
-    // не подставляем.
+    // В БД хранится только ключ — публичный URL собирается на чтении, см. getUrl().
+    return key;
+  }
+
+  // Обратная операция к upload(): собирает публичную ссылку из ключа. S3_PUBLIC_URL
+  // уже указывает на конкретный бакет: у R2 это публичный домен бакета, у MinIO —
+  // endpoint с именем бакета в пути, поэтому bucket сюда не подставляем.
+  //
+  // Гвард на уже-полный URL — не заглушка на будущее, а защита от гонки при деплое:
+  // Redis-кэш переживает редеплой (инвалидация только через CacheService.bump()),
+  // и ответ, закэшированный ДО миграции старых ключей, может долежать в кэше и
+  // попасть сюда уже с полным URL внутри — без гварда получился бы задвоенный префикс.
+  getUrl(key: string): string {
+    if (key.startsWith('http://') || key.startsWith('https://')) return key;
     return `${this.publicUrl}/${key}`;
   }
 
-  // Обратная операция к upload(): вырезает ключ из публичной ссылки. Симметрия
-  // с upload() важна — publicUrl у MinIO содержит имя бакета в пути, у R2 нет,
-  // поэтому парсить ссылку регуляркой по префиксу папки (`catalog/…`) нельзя.
-  keyFromUrl(url: string): string | null {
-    const prefix = `${this.publicUrl}/`;
-    return url.startsWith(prefix) ? url.slice(prefix.length) : null;
+  getUrlOrNull(key: string | null): string | null {
+    return key ? this.getUrl(key) : null;
   }
 
   // Нужна воркеру транскода: оригинал видео лежит в бакете, а не в памяти

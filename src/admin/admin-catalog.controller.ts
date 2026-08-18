@@ -128,10 +128,10 @@ export class AdminCatalogController {
     // originalname/mimetype — те приходят от клиента и ничем не подтверждены.
     const { buffer, contentType, ext } = await this.image.toWebp(file.buffer);
     const key = `catalog/${id}-${Date.now()}.${ext}`;
-    const imageUrl = await this.storage.upload(key, buffer, contentType);
+    await this.storage.upload(key, buffer, contentType);
     const { item } = await this.catalog.addMedia(
       id,
-      { url: imageUrl, type: MediaType.IMAGE, status: MediaStatus.READY },
+      { url: key, type: MediaType.IMAGE, status: MediaStatus.READY },
       user,
     );
     return item;
@@ -146,17 +146,13 @@ export class AdminCatalogController {
     user: AuthUser,
   ) {
     const key = this.mediaProcessing.sourceKey(file.originalname);
-    const sourceUrl = await this.storage.upload(
-      key,
-      file.buffer,
-      file.mimetype,
-    );
+    await this.storage.upload(key, file.buffer, file.mimetype);
     let created: { item: CatalogItem; mediaId: string };
     try {
       created = await this.catalog.addMedia(
         id,
         {
-          url: sourceUrl,
+          url: key,
           type: MediaType.VIDEO,
           status: MediaStatus.PROCESSING,
         },

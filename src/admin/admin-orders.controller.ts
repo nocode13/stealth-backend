@@ -26,6 +26,7 @@ import {
 } from '../orders/order.response';
 import type { OrderGroupWithOrders } from '../orders/orders.service';
 import { OrdersService } from '../orders/orders.service';
+import { StorageService } from '../storage/storage.service';
 
 // Заказы в админке — списки и деталка листают ГРУППЫ чекаута (см. AGENTS.md
 // «Заказы»): SELLER видит группы, где участвует, но внутри — только свою часть
@@ -38,7 +39,10 @@ import { OrdersService } from '../orders/orders.service';
 @UseGuards(AuthenticatedGuard, RolesGuard)
 @Roles(Role.SUPER_ADMIN, Role.SELLER)
 export class AdminOrdersController {
-  constructor(private readonly orders: OrdersService) {}
+  constructor(
+    private readonly orders: OrdersService,
+    private readonly storage: StorageService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -78,6 +82,7 @@ export class AdminOrdersController {
   ) {
     return toOrderGroupResponse(
       await this.orders.changeStatus(user, orderId, dto),
+      this.storage,
     );
   }
 
@@ -98,6 +103,7 @@ export class AdminOrdersController {
   ) {
     return toOrderGroupResponse(
       await this.orders.changeGroupStatus(user, id, dto),
+      this.storage,
     );
   }
 
@@ -111,6 +117,7 @@ export class AdminOrdersController {
   ) {
     return toOrderGroupResponse(
       await this.orders.updateCourier(user, orderId, dto),
+      this.storage,
     );
   }
 
@@ -119,7 +126,7 @@ export class AdminOrdersController {
     group: OrderGroupWithOrders,
   ): OrderGroupResponse {
     return user.role === Role.SUPER_ADMIN
-      ? toOrderGroupResponse(group)
-      : toSellerOrderGroupResponse(group);
+      ? toOrderGroupResponse(group, this.storage)
+      : toSellerOrderGroupResponse(group, this.storage);
   }
 }
