@@ -7,6 +7,8 @@ import {
 import { ListingStatus, MediaStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
+import { StorageService } from '../storage/storage.service';
+import { withMediaUrls } from '../catalog/catalog-media.util';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 
 const withListing = {
@@ -47,6 +49,7 @@ export class CartService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly settings: SettingsService,
+    private readonly storage: StorageService,
   ) {}
 
   async getCart(userId: string): Promise<CartResponse> {
@@ -139,7 +142,14 @@ export class CartService {
       items.every((i) => i.listing.catalogItem.freeDelivery);
     const quote = await this.settings.quote(itemsTotal, { allFreeDelivery });
     return {
-      items,
+      // catalogItem.media хранит ключи S3-объектов — здесь собираем полные URL.
+      items: items.map((i) => ({
+        ...i,
+        listing: {
+          ...i.listing,
+          catalogItem: withMediaUrls(this.storage, i.listing.catalogItem),
+        },
+      })),
       itemCount,
       itemsTotal: quote.itemsTotal,
       deliveryFee: quote.deliveryFee,

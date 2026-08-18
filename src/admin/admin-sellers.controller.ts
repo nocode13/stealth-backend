@@ -85,7 +85,7 @@ export class AdminSellersController {
     // Расширение и Content-Type — из результата конвертации, не из originalname.
     const { buffer, contentType, ext } = await this.image.toWebp(file.buffer);
     const key = `sellers/${id}-${Date.now()}.${ext}`;
-    const bannerUrl = await this.storage.upload(key, buffer, contentType);
-    return this.sellers.updateBanner(id, bannerUrl);
+    await this.storage.upload(key, buffer, contentType);
+    return this.sellers.updateBanner(id, key);
   }
 }

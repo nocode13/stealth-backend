@@ -17,6 +17,7 @@ import type { AuthUser } from '../common/decorators/current-user.decorator';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CategoriesService } from '../categories/categories.service';
 import { CacheService } from '../cache/cache.service';
+import { withMediaUrls } from './catalog-media.util';
 import {
   CreateCatalogItemDto,
   FindCatalogQueryDto,
@@ -58,9 +59,16 @@ export class CatalogService {
     private readonly cache: CacheService,
   ) {}
 
+  // В БД media.url/posterUrl хранят ключ S3-объекта — здесь собираем полный URL для
+  // ответа. Кэш (findAll ниже) хранит сырые ключи: мэппинг применяется ПОСЛЕ
+  // cache.wrap(), иначе смена S3_PUBLIC_URL потребовала бы бампа кэша.
+  private withUrls(item: CatalogItem): CatalogItem {
+    return withMediaUrls(this.storage, item);
+  }
+
   // Витрина (мобилка): только одобренные позиции, master и чужие продавцы вперемешку.
   async findAll(query: FindCatalogQueryDto): Promise<CursorPage<CatalogItem>> {
-    return this.cache.wrap('catalog', query, async () => {
+    const page = await this.cache.wrap('catalog', query, async () => {
       const rows = await this.prisma.catalogItem.findMany({
         where: {
           status: ReviewStatus.APPROVED,
@@ -77,6 +85,7 @@ export class CatalogService {
       });
       return toCursorPage(rows, query.limit);
     });
+    return { ...page, items: page.items.map((i) => this.withUrls(i)) };
   }
 
   // Админка: SUPER_ADMIN видит всё (+ фильтры status/sellerId), SELLER — master
@@ -109,7 +118,8 @@ export class CatalogService {
       skip: query.cursor ? 1 : 0,
       take: query.limit + 1,
     });
-    return toCursorPage(rows, query.limit);
+    const page = toCursorPage(rows, query.limit);
+    return { ...page, items: page.items.map((i) => this.withUrls(i)) };
   }
 
   async findOne(id: string): Promise<CatalogItem> {
@@ -118,7 +128,7 @@ export class CatalogService {
       include: withCategory,
     });
     if (!item) throw new NotFoundException('Позиция справочника не найдена');
-    return item;
+    return this.withUrls(item);
   }
 
   async create(
@@ -142,7 +152,7 @@ export class CatalogService {
       include: withCategory,
     });
     await this.cache.bump();
-    return created;
+    return this.withUrls(created);
   }
 
   async update(
@@ -168,7 +178,7 @@ export class CatalogService {
       include: withCategory,
     });
     await this.cache.bump();
-    return updated;
+    return this.withUrls(updated);
   }
 
   async remove(id: string, user: AuthUser): Promise<void> {
@@ -216,17 +226,21 @@ export class CatalogService {
     mediaId: string,
     user: AuthUser,
   ): Promise<CatalogItem> {
-    const item = await this.assertOwned(id, user);
-    const media = item.media.find((m) => m.id === mediaId);
+    // Только проверка владения/существования — media() отсюда не используется:
+    // findOne() (через assertOwned) отдаёт уже собранные URL, а для удаления объекта
+    // в S3 нужен именно ключ, поэтому он берётся отдельным запросом ниже.
+    await this.assertOwned(id, user);
+    const media = await this.prisma.catalogItemMedia.findFirst({
+      where: { id: mediaId, catalogItemId: id },
+    });
     if (!media) throw new NotFoundException('Медиафайл не найден');
 
     // У видео объектов в бакете два: сам файл и обложка (у PROCESSING в url лежит
     // ещё не обработанный оригинал — его тоже надо убрать).
-    for (const url of [media.url, media.posterUrl]) {
-      const oldKey = url ? this.storage.keyFromUrl(url) : null;
-      if (!oldKey) continue;
-      this.storage.delete(oldKey).catch((e: unknown) => {
-        this.logger.warn(`Не удалось удалить объект ${oldKey}`, e);
+    for (const key of [media.url, media.posterUrl]) {
+      if (!key) continue;
+      this.storage.delete(key).catch((e: unknown) => {
+        this.logger.warn(`Не удалось удалить объект ${key}`, e);
       });
     }
 

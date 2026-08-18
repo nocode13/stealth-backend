@@ -119,8 +119,8 @@ export default () => ({
     bucket: process.env.S3_BUCKET ?? 'catalog',
     accessKey: process.env.S3_ACCESS_KEY,
     secretKey: process.env.S3_SECRET_KEY,
-    // Хвостовой слэш срезаем: upload() и keyFromUrl() склеивают/режут ссылку
-    // по `${publicUrl}/${key}`, и на двойном слэше они разъедутся.
+    // Хвостовой слэш срезаем: StorageService.getUrl() склеивает ссылку по
+    // `${publicUrl}/${key}`, и на двойном слэше она разъедется.
     publicUrl: process.env.S3_PUBLIC_URL?.replace(/\/+$/, ''),
   },
   cache: {

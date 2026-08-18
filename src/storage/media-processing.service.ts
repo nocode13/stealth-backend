@@ -75,11 +75,7 @@ export class MediaProcessingService implements OnApplicationBootstrap {
     // Строку могли удалить, пока задача ждала очереди.
     if (!media || media.status !== MediaStatus.PROCESSING) return;
 
-    const sourceKey = this.storage.keyFromUrl(media.url);
-    if (!sourceKey) {
-      await this.fail(mediaId, 'ссылка на оригинал не из нашего бакета');
-      return;
-    }
+    const sourceKey = media.url;
 
     const dir = await mkdtemp(join(tmpdir(), 'stealth-media-'));
     const inputPath = join(dir, `src${extname(sourceKey)}`);

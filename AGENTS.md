@@ -528,11 +528,18 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 1600 `fit: inside` без апскейла → webp q80. EXIF/GPS не сохраняются; расширение и content-type
 берутся из результата конверсии, никогда из `originalname`.
 
-`StorageService` — S3-клиент (`forcePathStyle: true`). ⚠️ `S3_PUBLIC_URL` указывает на
-**конкретный бакет**, имя бакета входит в значение (`http://localhost:9000/catalog` у MinIO,
-публичный домен у R2); ссылка склеивается как `${S3_PUBLIC_URL}/${key}`, `S3_BUCKET` нужен
-только для самих S3-вызовов. `keyFromUrl` — инверсия через отрезание префикса (регуляркой
-нельзя: у MinIO бакет в пути, у R2 — нет).
+`StorageService` — S3-клиент (`forcePathStyle: true`). ⚠️ **В БД хранится только ключ
+объекта** (`catalog/foo.webp`), не полный URL — `upload()` возвращает и в колонки
+(`CatalogItemMedia.url`/`posterUrl`, `Seller.bannerUrl`, `OrderItem.catalogItemImageUrl`)
+пишется именно ключ. Полный URL собирается только на чтении, `getUrl(key)`/
+`getUrlOrNull(key)`: `S3_PUBLIC_URL` указывает на **конкретный бакет**, имя бакета входит в
+значение (`http://localhost:9000/catalog` у MinIO, публичный домен у R2); ссылка
+склеивается как `${S3_PUBLIC_URL}/${key}`, `S3_BUCKET` нужен только для самих S3-вызовов.
+`getUrl` — с гвардом на уже-полный URL (если `key` начинается с `http`, отдаётся как есть):
+Redis-кэш переживает редеплой, и без гварда значение, закэшированное до бэкфилла
+(`prisma/backfill-media-keys.ts`), задвоило бы префикс. Собирать URL в доменных сервисах
+(Catalog/Listings/Cart/Sellers) и в мэппере заказов (`order.response.ts`), не в
+контроллерах — контроллеры отдают то, что вернул сервис, без собственной логики.
 
 **Галерея каталога:** `CatalogItemImage` (`url`, `sortOrder`, каскад от `CatalogItem`), максимум
 10 фото, всегда `orderBy sortOrder asc`. Reorder — обмен `sortOrder` с соседом

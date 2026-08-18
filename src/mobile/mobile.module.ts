@@ -12,6 +12,7 @@ import { SettingsModule } from '../settings/settings.module';
 import { AddressesModule } from '../addresses/addresses.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PushModule } from '../push/push.module';
+import { StorageModule } from '../storage/storage.module';
 import { MobileAuthController } from './mobile-auth.controller';
 import { MobileCategoriesController } from './mobile-categories.controller';
 import { MobileCatalogController } from './mobile-catalog.controller';
@@ -39,6 +40,7 @@ import { MobileSettingsController } from './mobile-settings.controller';
     AddressesModule,
     NotificationsModule,
     PushModule,
+    StorageModule,
   ],
   controllers: [
     MobileAuthController,
