@@ -15,6 +15,11 @@ function stripKey<T extends string | null>(url: T): T {
 
 async function main() {
   if (!publicUrl) throw new Error('S3_PUBLIC_URL не задан в env');
+  console.log('Префикс для срезки:', `${publicUrl}/`);
+
+  let sellersUpdated = 0;
+  let mediaUpdated = 0;
+  let itemsUpdated = 0;
 
   const sellers = await prisma.seller.findMany({
     where: { bannerUrl: { not: null } },
@@ -23,6 +28,7 @@ async function main() {
     const bannerUrl = stripKey(s.bannerUrl);
     if (bannerUrl !== s.bannerUrl) {
       await prisma.seller.update({ where: { id: s.id }, data: { bannerUrl } });
+      sellersUpdated++;
     }
   }
 
@@ -35,6 +41,7 @@ async function main() {
         where: { id: m.id },
         data: { url, posterUrl },
       });
+      mediaUpdated++;
     }
   }
 
@@ -48,13 +55,30 @@ async function main() {
         where: { id: i.id },
         data: { catalogItemImageUrl },
       });
+      itemsUpdated++;
+    }
+  }
+
+  // Нашлось, но ни одна строка не совпала с префиксом — почти наверняка
+  // S3_PUBLIC_URL в этом окружении не тот, с которым были загружены старые
+  // файлы. Печатаем пример для сверки глазами, а не гадаем молча.
+  if (sellersUpdated + mediaUpdated + itemsUpdated === 0) {
+    const sample = media[0]?.url ?? sellers[0]?.bannerUrl ?? items[0]?.catalogItemImageUrl;
+    if (sample) {
+      console.warn(
+        'Ни одна строка не изменилась — префикс не совпал ни с одним значением. Пример из БД:',
+        sample,
+      );
     }
   }
 
   console.log('Бэкфилл готов:', {
-    sellers: sellers.length,
-    media: media.length,
-    orderItems: items.length,
+    sellersFound: sellers.length,
+    sellersUpdated,
+    mediaFound: media.length,
+    mediaUpdated,
+    orderItemsFound: items.length,
+    orderItemsUpdated: itemsUpdated,
   });
 }
 
