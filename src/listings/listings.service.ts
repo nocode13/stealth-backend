@@ -58,7 +58,10 @@ export class ListingsService {
   // Кэш (findStorefront/findOnePublic) хранит сырые ключи: мэппинг применяется ПОСЛЕ
   // cache.wrap(), как и в CatalogService.
   private withUrls(listing: Listing): Listing {
-    return { ...listing, catalogItem: withMediaUrls(this.storage, listing.catalogItem) };
+    return {
+      ...listing,
+      catalogItem: withMediaUrls(this.storage, listing.catalogItem),
+    };
   }
 
   // Витрина мобилки: только активные листинги. status из query игнорируется — тут

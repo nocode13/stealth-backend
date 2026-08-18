@@ -28,7 +28,10 @@ export class SellersService {
 
   // bannerUrl в БД хранится как ключ S3-объекта — здесь собираем полный URL для ответа.
   private withUrl(seller: Seller): Seller {
-    return { ...seller, bannerUrl: this.storage.getUrlOrNull(seller.bannerUrl) };
+    return {
+      ...seller,
+      bannerUrl: this.storage.getUrlOrNull(seller.bannerUrl),
+    };
   }
 
   async findAll(query: FindSellersQueryDto): Promise<CursorPage<Seller>> {

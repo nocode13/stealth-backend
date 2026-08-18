@@ -145,7 +145,10 @@ export class CartService {
       // catalogItem.media хранит ключи S3-объектов — здесь собираем полные URL.
       items: items.map((i) => ({
         ...i,
-        listing: { ...i.listing, catalogItem: withMediaUrls(this.storage, i.listing.catalogItem) },
+        listing: {
+          ...i.listing,
+          catalogItem: withMediaUrls(this.storage, i.listing.catalogItem),
+        },
       })),
       itemCount,
       itemsTotal: quote.itemsTotal,
