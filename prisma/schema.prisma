@@ -124,6 +124,10 @@ model User {
   // если его ещё не было, дописывается сюда.
   phone           String?        @unique
   email           String?        @unique
+  // Адрес подтверждён кодом с почты. NULL — вписан в профиль до перехода на
+  // email-вход (легаси) и как якорь входа не считается доверенным: verify по
+  // такому адресу пускает и заодно проставляет emailVerifiedAt.
+  emailVerifiedAt DateTime?
   name            String?
   // passwordHash опционален: он есть только у админов (вход по паролю в админку).
   passwordHash    String?
@@ -175,28 +179,23 @@ model TelegramAuthSession {
   @@map("telegram_auth_sessions")
 }
 
-// Вход по номеру телефона: номер заявляется в мобилке, подтверждается в основном
-// боте кнопкой «Поделиться номером» (request_contact), и только после совпадения
-// номеров бот присылает OTP. Отдельная модель, а не поля в TelegramAuthSession:
-// у неё другой жизненный цикл (два шага подтверждения) и свои счётчики.
-model PhoneAuthSession {
+// Вход по коду на почту: код генерится сразу при создании сессии и уходит в
+// письмо (Resend) — в отличие от бывшего PhoneAuthSession, промежуточного шага
+// подтверждения тут нет, поэтому ни codeHash?, ни mismatch, ни поллинга не нужно.
+model EmailAuthSession {
   id         String    @id @default(cuid())
   nonce      String    @unique
-  phone      String // E.164, заявлен в мобилке
-  codeHash   String? // sha256(OTP); null = номер ещё не подтверждён в боте
-  telegramId String? // проставляется ботом на /start otp_<nonce>
-  name       String? // имя из Telegram, чтобы дожило до verify
-  userId     String? // резолвится на verify (у тестовой сессии — сразу)
-  attempts   Int       @default(0) // неудачные вводы кода, на 5-м сессия гаснет
-  mismatch   Boolean   @default(false) // контакт не совпал с заявленным номером
+  email      String // нормализован: trim + lowercase
+  codeHash   String // sha256(OTP) — код уже отправлен на почту
+  userId     String? // привязка к текущему юзеру (link-флоу) либо тестовый аккаунт
+  attempts   Int       @default(0) // неверные вводы кода, на 5-м сессия гаснет
   consumedAt DateTime?
   expiresAt  DateTime
   createdAt  DateTime  @default(now())
 
-  @@index([phone])
-  @@index([telegramId])
+  @@index([email])
   @@index([expiresAt])
-  @@map("phone_auth_sessions")
+  @@map("email_auth_sessions")
 }
 
 // Короткоживущая сессия «сходить в бота и вернуться» — та же механика, что у
