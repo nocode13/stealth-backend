@@ -57,12 +57,13 @@ src/
   cache/                   # @Global CacheService (Redis, витрина)
   common/                  # @Roles, @CurrentUser, RolesGuard, курсорная пагинация,
                            # telegram-identity.ts (покупатель и staff — разные учётки)
-  auth/                    # стратегии и guard'ы: JWT / session / local
+  auth/                    # стратегии и guard'ы: JWT / session / local; email-auth.service.ts — вход по коду на почту
   users/ sellers/ categories/ catalog/ listings/ cart/ addresses/ settings/
   orders/                  # OrdersService, order-status.ts, order-notifier.service.ts
   notifications/ metrics/  # in-app лента · агрегаты для дашборда админки
   storage/                 # StorageService (S3) + ImageService (sharp → webp)
-  telegram/                # два бота: bootstrap + композеры + исходящие + вход по номеру
+  mail/                    # исходящая почта (Resend) — код для входа
+  telegram/                # два бота: bootstrap + композеры + исходящие + вход через бота
   admin/ mobile/           # API-поверхности (+ admin/upload.options.ts)
 ```
 
@@ -75,12 +76,14 @@ src/
 
 - **User** — `telegramId?` (nullable unique) — **якорь личности покупателя** (основной бот);
   `staffTelegramId?` (nullable unique) — адрес кабинета в боте продавца, колонки независимы
-  (см. «Telegram»). `phone?`/`email?` (nullable unique) и `name?` — опциональные, юзер
-  дозаполняет через `PATCH /mobile/auth/me`; обязательны только в checkout (уходят в снапшот
-  заказа, телефон дописывается в профиль, P2002 молча пропускается). При входе по номеру
-  `phone` заполняется сразу — он уже подтверждён. `passwordHash?` только у админов (у
-  сотрудника его может не быть — тогда в админку он не входит, но кабинет в боте работает),
-  `role`, `sellerId?`.
+  (см. «Telegram»). `email?` (nullable unique) — второй якорь входа (см. «Аутентификация»);
+  `emailVerifiedAt?` отмечает, что владение ящиком доказано кодом, `NULL` — легаси-значение,
+  вписанное через профиль до перехода на email-вход. `phone?` (nullable unique) и `name?` —
+  опциональные профильные поля, юзер дозаполняет `phone`/`name` через `PATCH /mobile/auth/me`
+  (`email` там больше не редактируется — только через код на почту); обязательны только в
+  checkout (уходят в снапшот заказа, телефон дописывается в профиль, P2002 молча пропускается).
+  `passwordHash?` только у админов (у сотрудника его может не быть — тогда в админку он не
+  входит, но кабинет в боте работает), `role`, `sellerId?`.
 - **Seller** — арендатор: `name`, `description?`, `bannerUrl?`, `status`, `ownerUserId`.
   **Команда — это `members` (`User.sellerId`), их много на одного продавца**: все они
   `role: SELLER` с одним `sellerId`, то есть уже существующий скоуп заказов/листингов/каталога
@@ -109,10 +112,11 @@ src/
 - **TelegramAuthSession** — вход по nonce; токенов в ней нет (при консьюме выпускается свежая
   пара), поэтому в таблице нет секретов. **BotLinkSession** — «сходить в бота и вернуться»
   для уже известного юзера, `purpose` сейчас только `SELLER_LINK`, TTL 300 с.
-- **PhoneAuthSession** — вход по номеру (TTL 600 с: юзеру надо сходить в бота и вернуться).
-  Хранит заявленный `phone`, `telegramId`/`name` из бота, `codeHash` (sha256 OTP, `null` —
-  номер ещё не подтверждён), счётчик `attempts` и флаг `mismatch`. Отдельная модель, а не
-  поля в `TelegramAuthSession`: другой жизненный цикл (два шага подтверждения).
+- **EmailAuthSession** — вход по коду на почту (TTL 600 с). В отличие от бывшего
+  `PhoneAuthSession` промежуточного шага нет: `codeHash` (sha256 OTP) пишется сразу при
+  создании строки, письмо уходит через Resend в тот же момент — ни поллинга, ни `mismatch`
+  не существует. `userId?` — привязка к текущему юзеру (link-флоу) либо тестовый аккаунт,
+  счётчик `attempts` гасит сессию на 5-й неудаче.
 - **SavedAddress** — адресная книга (`label?`, `address`, `comment?`, `lat?/lng?`).
 - **Notification** — in-app лента. **OrderGroup / Order / OrderItem / OrderStatusHistory** —
   см. «Заказы»; `orderNumber`/`groupNumber` autoincrement, по ним ищут в админке.
@@ -168,7 +172,7 @@ src/
 
 | Роут | Guard | Эндпоинты |
 |---|---|---|
-| `mobile/auth` | JwtAuthGuard только на `me`/`logout` | `POST telegram/session`, `GET telegram/session/:nonce`, `POST telegram/miniapp`, `POST phone/session`, `GET phone/session/:nonce`, `POST phone/verify`, `POST refresh`, `GET/PATCH me`, `POST logout` |
+| `mobile/auth` | JwtAuthGuard на `me`/`logout`/`email/link/*` | `POST telegram/session`, `GET telegram/session/:nonce`, `POST telegram/miniapp`, `POST email/session`, `POST email/verify`, `POST email/link/session`, `POST email/link/verify`, `POST refresh`, `GET/PATCH me`, `POST logout` |
 | `mobile/listings`, `mobile/categories`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query |
 | `mobile/catalog` | JwtAuthGuard | `GET /` — ⚠️ асимметрия: остальная витрина публичная |
 | `mobile/cart` | JwtAuthGuard | `GET /`, `POST items`, `PATCH/DELETE items/:id`, `DELETE /` |
@@ -331,9 +335,10 @@ upsert **по самому токену**, а не по паре с `userId`: т
 **Bootstrap отдельно от хендлеров, входящие отдельно от исходящих:** `telegram-bot.service.ts`
 (только запуск: приватный `startBot()` поднимает оба бота, `handleUpdate(target, update)`),
 `telegram-notify.service.ts` (исходящие, свой модуль), `telegram-auth.service.ts` (вход через
-Telegram), `phone-auth.service.ts` (вход по номеру), `telegram-link.service.ts`
-(привязка/отвязка продавца), `handlers/{seller,customer}.composer.ts` — по композеру на бот,
-цепочек `next()` между ними больше нет.
+Telegram), `telegram-link.service.ts` (привязка/отвязка продавца),
+`handlers/{seller,customer}.composer.ts` — по композеру на бот, цепочек `next()` между ними
+больше нет. Вход по коду на почту (`src/auth/email-auth.service.ts`) в этом списке
+намеренно отсутствует — у него нет ни одной зависимости от бота, см. «Аутентификация».
 
 **Почему исходящие вынесены.** `OrdersModule` шлёт уведомления, а `seller.composer` зовёт
 `OrdersService` — прямой цикл модулей. Он разорван тем, что `TelegramNotifyService` держит
@@ -393,7 +398,8 @@ Payload узкий — только `sub`/`role`/`sellerId` (`AuthPrincipal`): �
 БД, а не claims. `POST /mobile/auth/refresh` — ротация (старый гасится, выдаётся новая пара);
 в БД `sha256` от токена, в payload `jti`. `POST /mobile/auth/logout` отзывает refresh.
 
-**Вход — только через основной бот**, он же и регистрация. Три пути в `AuthService.issueTokens`:
+**Вход — через основной бот или по коду на почту**, оба пути — регистрация.
+В `AuthService.issueTokens` сходятся:
 
 1. *nonce + polling* — `POST /mobile/auth/telegram/session` → `{ nonce, botUrl, expiresIn }`,
    бот ловит `/start <nonce>`, `GET …/session/:nonce` отдаёт `pending | expired | confirmed` +
@@ -402,51 +408,63 @@ Payload узкий — только `sub`/`role`/`sellerId` (`AuthPrincipal`): �
 2. *Mini App* — `POST /mobile/auth/telegram/miniapp { initData }`. Подпись проверяется вручную
    на `node:crypto` (`secret = HMAC("WebAppData", botToken)`, сверка `hash`, свежесть
    `auth_date`) — библиотека ради 15 строк не нужна.
-3. *По номеру телефона* — `PhoneAuthService`, см. ниже.
+3. *По коду на почту* — `EmailAuthService`, см. ниже. Бот в этом пути не участвует вовсе.
 
-**Вход по номеру (`src/telegram/phone-auth.service.ts`, `PhoneAuthSession`).**
-`POST /mobile/auth/phone/session { phone }` → `{ nonce, botUrl, expiresIn, codeSent }` →
-`/start otp_<nonce>` в основном боте → бот показывает кнопку **«Поделиться номером»**
-(`request_contact`) → `GET …/phone/session/:nonce` отдаёт `pending | code_sent | mismatch |
-expired` → `POST …/phone/verify { nonce, code }` → токены (тот же однократный claim).
+**Вход по коду на почту (`src/auth/email-auth.service.ts`, `EmailAuthSession`).**
+`POST /mobile/auth/email/session { email }` → код генерится сразу и уходит письмом через
+Resend (`src/mail/`) → `{ nonce, expiresIn }` → `POST …/email/verify { nonce, code }` → токены
+(тот же однократный claim, что у `TelegramAuthService.poll`). Поллинг-эндпоинта нет: код уже в
+письме, ждать нечего. 5 неверных кодов подряд гасят сессию; анти-флуд свой, на подсчёте сессий
+по адресу (throttler в проекте нет): 5 за 15 минут на один адрес → **429**. Пустой
+`RESEND_API_KEY` → приложение поднимается (warning в лог), `email/session` → **400**; провал
+самой отправки письма гасит созданную сессию и превращается в **502**.
 
-⚠️ Ключевое: **введённый номер сам по себе ничего не доказывает** — иначе любой занял бы
-чужой (`phone` unique и уходит в снапшоты заказов). Настоящий номер даёт Telegram в
-`message:contact`, мы сверяем его с заявленным, и только при совпадении шлём 6-значный код.
-Контакт принимается лишь свой (`contact.user_id === from.id`, чужой можно переслать),
-несовпадение гасит сессию (`mismatch`), 5 неверных кодов — тоже. Анти-флуд свой,
-на подсчёте сессий по номеру (throttler в проекте нет): 5 за 15 минут → **429**.
+⚠️ **Легаси-email.** У части юзеров `email` вписан вручную через профиль ещё до перехода на
+email-вход и никем не подтверждён (`emailVerifiedAt = NULL`). Поиск в `verify` идёт по `email`
+**без** фильтра по `emailVerifiedAt` — иначе такой юзер попадал бы в тупик (логин его не
+находит, а создание новой учётки падает на unique-индексе, и починить через профиль уже
+нельзя — поле стало нередактируемым); найденной неподтверждённой учётке `emailVerifiedAt`
+проставляется прямо в момент успешной проверки кода. Инвариант «без доступа к ящику войти
+нельзя» сохраняется полностью — код ушёл именно на этот адрес.
 
-Коллизии решаются строго, без слияния учёток: юзер по `telegramId` → дописываем ему `phone`;
-юзера нет, но номер занят учёткой **без** `telegramId` → привязываем; номер занят учёткой с
-другим `telegramId` → **409**; никого нет → создаём.
+Коллизии проще телефонных, потому что якорь ровно один (адрес): юзер с этим `email` есть →
+логиним его (заодно подтверждая легаси-адрес выше); никого нет → `users.createFromEmailLogin`
+заводит нового сразу с `emailVerifiedAt`; P2002 на гонке записи → **409**.
 
-**Тестовый аккаунт Play Store.** `TEST_LOGIN_PHONE` + `TEST_LOGIN_OTP` (работает, только если
-заданы **обе**): с этим номером `phone/session` не создаёт ссылку на бота, а сразу отдаёт
-`botUrl: null, codeSent: true`, и `phone/verify` принимает вечный код. У ревьюера Google нет
-доступа к нашему боту — без этой ветки верификацию не пройти. Юзер под тест-номер заводится
-лениво, при первом входе (сид намеренно содержит только супер-админа).
+**Привязка почты авторизованному юзеру** (вошедшему через Telegram): `POST
+…/email/link/session { email }` (`JwtAuthGuard`) → **409** сразу, если адрес занят **другой**
+учёткой, не дожидаясь письма → `POST …/email/link/verify { nonce, code }` → `user.email`/
+`emailVerifiedAt` обновляются на текущей учётке, P2002 на гонке → 409. Это единственный способ
+попасть на аккаунт адресу — `PATCH /mobile/auth/me` его больше не принимает.
+
+**Тестовый аккаунт Play Store.** `TEST_LOGIN_EMAIL` + `TEST_LOGIN_OTP` (работает, только если
+заданы **обе**): с этим адресом `email/session` не отправляет письмо через Resend, а сразу
+готовит вечный код, который принимает `email/verify`. У ревьюера Google нет доступа к нашей
+почте — без этой ветки верификацию не пройти. Юзер под тест-адрес заводится лениво, при первом
+входе (сид намеренно содержит только супер-админа).
 
 Мобилке он виден по флагу **`isTest`** в `AuthUser` (`GET /mobile/auth/me`, там же и ответ
 `PATCH /me`, и `GET /admin/auth/me`). Считается в одном месте — `isTestAccount`
-(`src/common/test-account.ts`, зовёт `AuthService.toAuthUser`): совпадение `User.phone` с
-`TEST_LOGIN_PHONE` при заданных **обеих** env. Колонки в БД нет намеренно — флаг целиком
-выводится из env + номера. ⚠️ Из этого следует **запрет на правку профиля**: `updateProfile`
-отдаёт тестовому аккаунту **403** на любой `PATCH /mobile/auth/me`, иначе сменой телефона он
-перестал бы быть тестовым, а следующий вход по `TEST_LOGIN_PHONE` завёл бы новую учётку.
-Проверка в сервисе, а не в контроллере, — чтобы её нельзя было обойти мимо метода.
+(`src/common/test-account.ts`, зовёт `AuthService.toAuthUser`): совпадение `User.email` с
+`TEST_LOGIN_EMAIL` при заданных **обеих** env. Колонки в БД нет намеренно — флаг целиком
+выводится из env + адреса. ⚠️ Из этого следует **запрет на правку профиля**: `updateProfile`
+отдаёт тестовому аккаунту **403** на любой `PATCH /mobile/auth/me`, а `EmailAuthService.
+createLinkSession` — тот же **403** на попытку сменить себе почту через link-флоу; иначе
+тестовый аккаунт мог бы сам себя «расколдовать», и следующий вход по `TEST_LOGIN_EMAIL` завёл
+бы новую учётку. Обе проверки — в сервисах, а не в контроллерах, чтобы их нельзя было обойти
+мимо метода.
 
-`PATCH /mobile/auth/me` — `{ name?, phone?, email? }`, пустая строка очищает поле, занятые
-`phone`/`email` → **409** (`updateProfile` разбирает `e.meta.target` из P2002), тестовый
-аккаунт → **403**.
+`PATCH /mobile/auth/me` — `{ name?, phone? }`, пустая строка очищает поле, занятый `phone` →
+**409**, тестовый аккаунт → **403**. `email` в теле не принимается вовсе: глобальный
+`ValidationPipe({ forbidNonWhitelisted })` отвергает такое тело **400**-й — это якорь входа, и
+менять его можно только кодом на почту (см. выше).
 
 ⚠️ **Телефон заполняется ровно один раз и дальше неизменяем** (**403** на попытку сменить или
 очистить; прислать тот же номер можно — клиент шлёт форму целиком, сверка идёт по
 `normalizePhone`, и значение в БД при этом не переписывается). Причина: подтверждения номера в
-этом эндпоинте нет — настоящий номер даёт только Telegram (`PhoneAuthService`), — а `phone`
-уникален, уходит в снапшоты заказов и служит контактом курьеру; свободный `PATCH` позволял бы
-занять чужой номер или увести у себя вход по номеру. Пустой `phone` дозаполнить можно, это и
-есть тот единственный раз; бэкфилл из checkout работает по тому же правилу (`!user.phone`).
+этом эндпоинте нет, а `phone` уникален, уходит в снапшоты заказов и служит контактом курьеру —
+свободный `PATCH` позволял бы занять чужой номер. Пустой `phone` дозаполнить можно, это и есть
+тот единственный раз; бэкфилл из checkout работает по тому же правилу (`!user.phone`).
 
 ### Удаление аккаунта
 
@@ -458,14 +476,13 @@ Data Safety.
 ⚠️ **Строку `users` не удаляем, а обезличиваем.** `Order.userId` стоит `onDelete: Restrict`
 намеренно: заказы обязаны пережить уход покупателя ради отчётности продавца. Поэтому в одной
 транзакции: удаляются `savedAddresses`/`cartItems`/`notifications`/`refreshTokens`/`pushTokens`
-и незавершённые сессии входа (`telegramAuthSession`/`botLinkSession`/`phoneAuthSession` — живая
+и незавершённые сессии входа (`telegramAuthSession`/`botLinkSession`/`emailAuthSession` — живая
 сессия иначе восстановила бы привязку), в группах заказов (`OrderGroup`, не `Order` — снапшот
 переехал туда) затирается контактный снапшот (`contactName` → «Удалённый пользователь»,
 `contactPhone`/`deliveryAddress` → пусто, `deliveryComment`/`deliveryLat`/`deliveryLng` →
-null), а у юзера обнуляются
-`telegramId`/`staffTelegramId`/`phone`/`email`/`name`/`passwordHash` и ставится `deletedAt`.
-Эти колонки nullable+unique, поэтому обнуление **освобождает** их: повторный вход по тому же
-номеру создаст новую учётку.
+null), а у юзера обнуляются `telegramId`/`staffTelegramId`/`phone`/`email`/`emailVerifiedAt`/
+`name`/`passwordHash` и ставится `deletedAt`. Эти колонки nullable+unique, поэтому обнуление
+**освобождает** их: повторный вход по тому же адресу/номеру создаст новую учётку.
 
 Отсюда два следствия, которые легко забыть:
 
@@ -594,10 +611,13 @@ Buckets приватные и публичных URL не дают, а ссыл�
   `{ groupId, groupNumber, status }`) и **один** пуш; смена статуса одного заказа, не сдвинувшая
   `deriveGroupStatus`, не даёт ничего; повторный `PATCH …/group-status` тем же статусом — тоже;
   самоотмена пишет строку в ленту, но не шлёт покупателю ни пуша, ни сообщения в бот;
-- вход по номеру: чужой пересланный контакт и контакт с другим номером → отказ (`mismatch`),
-  верный код логинит, повтор того же `phone/verify` → 401, 6 сессий на номер за 15 мин → 429;
-- с заданными `TEST_LOGIN_PHONE`/`TEST_LOGIN_OTP` вход по тест-номеру проходит **не открывая
-  Telegram** (`botUrl: null`, `codeSent: true`); с пустыми env тот же номер идёт обычным путём;
+- вход по почте: верный код логинит, повтор того же `email/verify` → 401, 5 неверных кодов
+  подряд гасят сессию, 6 `email/session` на один адрес за 15 мин → 429; легаси-юзеру с
+  `emailVerifiedAt = NULL` логин попадает в ту же учётку и проставляет `emailVerifiedAt`;
+- с заданными `TEST_LOGIN_EMAIL`/`TEST_LOGIN_OTP` вход по тест-адресу проходит **не отправляя
+  письмо** (проверить в дашборде Resend); с пустыми env тот же адрес идёт обычным путём;
+  привязка почты авторизованному юзеру (`email/link/session`+`verify`) даёт `emailVerified:
+  true` в `GET /me`, а занятый другой учёткой адрес → 409 ещё на шаге `session`;
 - тест-аккаунт: `GET /mobile/auth/me` → `isTest: true`, любой `PATCH /mobile/auth/me` → **403**
   (у обычного юзера `isTest: false` и правка профиля работает как раньше);
 - телефон: юзеру с пустым `phone` `PATCH /me` его проставляет, повторная смена → **403**,

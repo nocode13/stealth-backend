@@ -18,6 +18,9 @@ export interface AuthUser extends AuthPrincipal {
   staffTelegramId: string | null;
   phone: string | null;
   email: string | null;
+  // Адрес подтверждён кодом с почты (common/test-account.ts, email-auth.service.ts).
+  // Дата подтверждения клиенту не нужна, поэтому наружу — только флаг.
+  emailVerified: boolean;
   name: string | null;
   // Тестовый аккаунт Play Store (common/test-account.ts): мобилка по нему
   // помечает профиль как read-only, PATCH /mobile/auth/me для него отдаёт 403.
