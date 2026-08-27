@@ -84,45 +84,45 @@ export class UsersService {
     });
   }
 
-  // Регистрация по номеру телефона: номер уже подтверждён (контакт из Telegram
-  // либо тестовый аккаунт), поэтому кладём его сразу. telegramId null — только у
-  // тестового аккаунта Play Store, у него шага с ботом нет.
-  createFromPhoneLogin(data: {
-    telegramId: string | null;
-    phone: string;
+  // Регистрация по коду на почту: адрес уже подтверждён (код только что пришёл
+  // именно на него, либо это тестовый аккаунт), поэтому emailVerifiedAt
+  // проставляется сразу — второго подтверждения тому же адресу не нужно.
+  createFromEmailLogin(data: {
+    email: string;
     name?: string | null;
     role?: Role;
   }): Promise<User> {
     return this.prisma.user.create({
       data: {
-        telegramId: data.telegramId,
-        phone: data.phone,
+        email: data.email,
+        emailVerifiedAt: new Date(),
         name: data.name ?? null,
         role: data.role ?? Role.CUSTOMER,
       },
     });
   }
 
-  // Дозаполнение профиля. Все поля опциональны; пустая строка = очистить поле
+  // Дозаполнение профиля. Оба поля опциональны; пустая строка = очистить поле
   // (иначе уникальный индекс не даст второму юзеру сохранить тот же "").
+  // Email сюда не входит вовсе — это якорь входа, и правится он только через
+  // подтверждение кодом (EmailAuthService.createLinkSession/verifyLink).
   //
   // Тестовый аккаунт Play Store правку профиля не получает вовсе: он опознаётся по
-  // номеру, и смена телефона превратила бы его в обычного юзера, а следующий вход по
-  // TEST_LOGIN_PHONE завёл бы новую учётку. Проверка здесь, а не в контроллере, —
-  // чтобы её нельзя было обойти в обход этого метода.
+  // адресу почты, а этот метод email не трогает, так что «испортить» тестовость
+  // отсюда нельзя — проверка тем не менее здесь, а не в контроллере, чтобы её
+  // нельзя было обойти в обход этого метода.
   //
   // ⚠️ Телефон заполняется ОДИН раз и дальше неизменяем. Он уже уехал в снапшоты
   // заказов и служит контактом для курьера, а подтверждения номера в этом эндпоинте
-  // нет (настоящий номер даёт только Telegram, см. PhoneAuthService) — значит через
-  // PATCH юзер занял бы чужой номер или увёл бы у себя вход по номеру. Пустой phone
-  // дозаполнить можно — это и есть тот самый единственный раз.
+  // нет — значит через PATCH юзер занял бы чужой номер. Пустой phone дозаполнить
+  // можно — это и есть тот самый единственный раз.
   async updateProfile(
     userId: string,
-    data: { name?: string; phone?: string; email?: string },
+    data: { name?: string; phone?: string },
   ): Promise<User> {
     const current = await this.findById(userId);
     if (!current) throw new NotFoundException('Пользователь не найден');
-    if (isTestAccount(current.phone, this.config)) {
+    if (isTestAccount(current.email, this.config)) {
       throw new ForbiddenException('Тестовый аккаунт нельзя редактировать');
     }
 
@@ -149,7 +149,6 @@ export class UsersService {
           // Номер уже есть → выше доказано, что он тот же; не переписываем, чтобы
           // не испортить нормализованное значение форматированием с клиента.
           phone: current.phone === null ? phone : undefined,
-          email: normalize(data.email),
         },
       });
     } catch (e) {
@@ -159,11 +158,7 @@ export class UsersService {
       ) {
         // target — список полей, нарушивших unique-индекс.
         const target = (e.meta?.target as string[] | undefined) ?? [];
-        const field = target.includes('phone')
-          ? 'Этот телефон'
-          : target.includes('email')
-            ? 'Этот email'
-            : 'Эти данные';
+        const field = target.includes('phone') ? 'Этот телефон' : 'Эти данные';
         throw new ConflictException(`${field} уже привязан к другому аккаунту`);
       }
       throw e;
@@ -184,7 +179,7 @@ export class UsersService {
     const user = await this.findById(userId);
     if (!user) throw new NotFoundException('Пользователь не найден');
     if (user.deletedAt) return; // идемпотентно: повтор не ошибка
-    if (isTestAccount(user.phone, this.config)) {
+    if (isTestAccount(user.email, this.config)) {
       throw new ForbiddenException('Тестовый аккаунт нельзя удалить');
     }
 
@@ -208,13 +203,13 @@ export class UsersService {
       this.prisma.notification.deleteMany({ where: { userId } }),
       this.prisma.refreshToken.deleteMany({ where: { userId } }),
       this.prisma.pushToken.deleteMany({ where: { userId } }),
-      // Незавершённые сессии входа: в них лежит телефон/telegramId, и живая
+      // Незавершённые сессии входа: в них лежит email/telegramId, и живая
       // сессия после удаления восстановила бы привязку к этой же строке.
       this.prisma.telegramAuthSession.deleteMany({ where: { userId } }),
       this.prisma.botLinkSession.deleteMany({ where: { userId } }),
-      this.prisma.phoneAuthSession.deleteMany({
-        where: user.phone
-          ? { OR: [{ userId }, { phone: user.phone }] }
+      this.prisma.emailAuthSession.deleteMany({
+        where: user.email
+          ? { OR: [{ userId }, { email: user.email }] }
           : { userId },
       }),
       // Заказы остаются, но обезличенными: суммы и позиции нужны для отчётности,
@@ -238,6 +233,7 @@ export class UsersService {
           staffTelegramId: null,
           phone: null,
           email: null,
+          emailVerifiedAt: null,
           name: null,
           passwordHash: null,
           deletedAt: new Date(),
