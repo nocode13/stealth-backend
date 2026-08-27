@@ -37,14 +37,20 @@ export const envValidationSchema = Joi.object({
   TELEGRAM_SELLER_BOT_USERNAME: Joi.string().allow('').optional(),
   TELEGRAM_SELLER_WEBHOOK_SECRET: Joi.string().allow('').optional(),
 
-  // Вход по номеру телефона. TTL больше, чем у входа через Telegram: юзеру нужно
-  // уйти в бота, поделиться контактом и вернуться в приложение.
-  PHONE_AUTH_SESSION_TTL_SECONDS: Joi.number().default(600),
+  // Вход по коду на почту (Resend). Пусто → приложение поднимается, в лог уходит
+  // warning, POST /mobile/auth/email/session отвечает 400 (тот же приём, что с
+  // TELEGRAM_BOT_TOKEN/REDIS_URL). RESEND_FROM — адрес отправителя вида
+  // `Egen <noreply@egen.uz>`; домен обязан быть верифицирован в Resend, иначе
+  // письма уходят только на собственный адрес аккаунта (локально можно гонять
+  // на onboarding@resend.dev).
+  RESEND_API_KEY: Joi.string().allow('').optional(),
+  RESEND_FROM: Joi.string().allow('').optional(),
+  EMAIL_AUTH_SESSION_TTL_SECONDS: Joi.number().default(600),
 
-  // Тестовый аккаунт для проверки в Play Store: с этим номером вход идёт мимо
-  // Telegram, а кодом служит вечный TEST_LOGIN_OTP. Работает, только если обе
+  // Тестовый аккаунт для проверки в Play Store: с этим адресом вход идёт мимо
+  // Resend, а кодом служит вечный TEST_LOGIN_OTP. Работает, только если обе
   // переменные непустые; по умолчанию выключено.
-  TEST_LOGIN_PHONE: Joi.string().allow('').optional(),
+  TEST_LOGIN_EMAIL: Joi.string().allow('').optional(),
   TEST_LOGIN_OTP: Joi.string().allow('').optional(),
 
   // S3-совместимое хранилище фото (локально — MinIO из docker-compose).
@@ -98,19 +104,23 @@ export default () => ({
       process.env.TG_AUTH_SESSION_TTL_SECONDS ?? '180',
       10,
     ),
-    phoneAuthTtlSeconds: parseInt(
-      process.env.PHONE_AUTH_SESSION_TTL_SECONDS ?? '600',
-      10,
-    ),
   },
   telegramSeller: {
     botToken: process.env.TELEGRAM_SELLER_BOT_TOKEN,
     botUsername: process.env.TELEGRAM_SELLER_BOT_USERNAME,
     webhookSecret: process.env.TELEGRAM_SELLER_WEBHOOK_SECRET,
   },
-  // Байпас включён, только когда заданы обе переменные (см. PhoneAuthService).
+  mail: {
+    resendApiKey: process.env.RESEND_API_KEY,
+    from: process.env.RESEND_FROM,
+    authSessionTtlSeconds: parseInt(
+      process.env.EMAIL_AUTH_SESSION_TTL_SECONDS ?? '600',
+      10,
+    ),
+  },
+  // Байпас включён, только когда заданы обе переменные (см. EmailAuthService).
   testLogin: {
-    phone: process.env.TEST_LOGIN_PHONE,
+    email: process.env.TEST_LOGIN_EMAIL,
     otp: process.env.TEST_LOGIN_OTP,
   },
   s3: {

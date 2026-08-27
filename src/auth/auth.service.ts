@@ -30,10 +30,12 @@ export class AuthService {
       staffTelegramId: user.staffTelegramId,
       phone: user.phone,
       email: user.email,
+      // Наружу отдаём флаг, а не дату — клиентам сама дата подтверждения не нужна.
+      emailVerified: user.emailVerifiedAt !== null,
       name: user.name,
       role: user.role,
       sellerId: user.sellerId,
-      isTest: isTestAccount(user.phone, this.config),
+      isTest: isTestAccount(user.email, this.config),
     };
   }
 

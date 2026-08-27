@@ -1,11 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsEmail,
-  IsOptional,
-  IsString,
-  Matches,
-  MaxLength,
-} from 'class-validator';
+import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 export class TelegramMiniAppDto {
   @ApiProperty({
@@ -16,8 +10,9 @@ export class TelegramMiniAppDto {
   initData: string;
 }
 
-// Дозаполнение профиля. Все поля опциональны — обязательными станут на этапе
-// заказов. Пустая строка означает «очистить поле».
+// Дозаполнение профиля. Оба поля опциональны — обязательными станут на этапе
+// заказов. Пустая строка означает «очистить поле». Email сюда не входит: это
+// якорь входа, редактируется только через код на почту (EmailAuthService).
 export class UpdateProfileDto {
   @ApiPropertyOptional({ example: 'Хикматжон' })
   @IsOptional()
@@ -31,9 +26,4 @@ export class UpdateProfileDto {
     message: 'phone должен быть в формате E.164, например +998901234567',
   })
   phone?: string;
-
-  @ApiPropertyOptional({ example: 'user@gmail.com' })
-  @IsOptional()
-  @IsEmail({}, { message: 'email некорректен' })
-  email?: string;
 }

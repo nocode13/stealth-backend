@@ -15,22 +15,22 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthService } from '../auth/auth.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RefreshDto } from '../auth/dto/auth.dto';
+import { EmailSessionDto, EmailVerifyDto } from '../auth/dto/email.dto';
+import { EmailAuthService } from '../auth/email-auth.service';
 import { TelegramMiniAppDto, UpdateProfileDto } from '../auth/dto/telegram.dto';
-import { PhoneSessionDto, PhoneVerifyDto } from '../auth/dto/phone.dto';
-import { PhoneAuthService } from '../telegram/phone-auth.service';
 import { TelegramAuthService } from '../telegram/telegram-auth.service';
 import { UsersService } from '../users/users.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
-// Аутентификация мобилки: вход через Telegram или по номеру телефона (код из
-// бота), access + refresh токены.
+// Аутентификация мобилки: вход через Telegram или по коду на почту (Resend),
+// access + refresh токены.
 @ApiTags('mobile/auth')
 @Controller('mobile/auth')
 export class MobileAuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly telegram: TelegramAuthService,
-    private readonly phone: PhoneAuthService,
+    private readonly email: EmailAuthService,
     private readonly users: UsersService,
   ) {}
 
@@ -52,32 +52,54 @@ export class MobileAuthController {
     return this.telegram.poll(nonce);
   }
 
-  @Post('phone/session')
+  @Post('email/session')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Начать вход по номеру: nonce + ссылка на бота',
+    summary: 'Начать вход по почте: код уходит на адрес сразу',
     description:
-      'Номер подтверждается в боте кнопкой «Поделиться номером», после чего бот ' +
-      'присылает код. codeSent=true (и botUrl=null) — шаг с ботом не нужен, ' +
-      'сразу вводим код: так устроен тестовый аккаунт для проверки в Play Store.',
+      'Поллинга нет: код приходит на почту сразу при создании сессии. ' +
+      '400 — вход по почте не сконфигурирован (пуст RESEND_API_KEY).',
   })
-  createPhoneSession(@Body() dto: PhoneSessionDto) {
-    return this.phone.createSession(dto.phone);
+  createEmailSession(@Body() dto: EmailSessionDto) {
+    return this.email.createSession(dto.email);
   }
 
-  @Get('phone/session/:nonce')
-  @ApiOperation({
-    summary: 'Статус входа по номеру: pending / code_sent / mismatch / expired',
-  })
-  pollPhoneSession(@Param('nonce') nonce: string) {
-    return this.phone.poll(nonce);
-  }
-
-  @Post('phone/verify')
+  @Post('email/verify')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Подтвердить код из бота и получить токены' })
-  verifyPhoneCode(@Body() dto: PhoneVerifyDto) {
-    return this.phone.verify(dto.nonce, dto.code);
+  @ApiOperation({ summary: 'Подтвердить код из письма и получить токены' })
+  verifyEmailCode(@Body() dto: EmailVerifyDto) {
+    return this.email.verify(dto.nonce, dto.code);
+  }
+
+  @Post('email/link/session')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Привязать/сменить почту текущего аккаунта: код на новый адрес',
+    description:
+      '409 сразу, если адрес занят другим аккаунтом — не дожидаясь письма.',
+  })
+  createEmailLinkSession(
+    @CurrentUser('id') userId: string,
+    @Body() dto: EmailSessionDto,
+  ) {
+    return this.email.createLinkSession(userId, dto.email);
+  }
+
+  @Post('email/link/verify')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Подтвердить код и привязать почту к текущему аккаунту',
+  })
+  async verifyEmailLink(
+    @CurrentUser('id') userId: string,
+    @Body() dto: EmailVerifyDto,
+  ) {
+    const user = await this.email.verifyLink(userId, dto.nonce, dto.code);
+    return this.auth.toAuthUser(user);
   }
 
   @Post('telegram/miniapp')
@@ -119,10 +141,11 @@ export class MobileAuthController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Дозаполнить профиль (имя / телефон / email, все опциональны)',
+    summary: 'Дозаполнить профиль (имя / телефон, оба опциональны)',
     description:
-      'Занятые phone/email → 409. Тестовому аккаунту (isTest в GET /me) правка ' +
-      'профиля запрещена целиком → 403.',
+      'Email в теле не принимается (email — якорь входа, меняется только через ' +
+      'код на почту): forbidNonWhitelisted отвергнет такое тело. Занятый phone → ' +
+      '409. Тестовому аккаунту (isTest в GET /me) правка профиля запрещена целиком → 403.',
   })
   async updateMe(
     @CurrentUser('id') userId: string,
