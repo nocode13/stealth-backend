@@ -243,12 +243,15 @@ export class OrderNotifier {
    *    работает как Telegram Mini App, и сообщение бота приходит в чат ПОД ней,
    *    поэтому юзер, не сворачивая приложение, его не увидит.
    * 2. Push — если у юзера есть хоть одна установка нативного приложения.
-   * 3. Telegram-сообщение — ИНАЧЕ, для тех, у кого нативки нет (Mini App, веб).
+   * 3. Telegram-сообщение — независимо от пункта 2, каждый раз.
    *
-   * Пункты 2 и 3 взаимоисключающие намеренно: с пушем Telegram-DM был бы вторым
-   * уведомлением об одном событии. Мёртвые токены вычищает PushService по
-   * receipts, так что «есть токен» означает живую установку, а не след от
-   * удалённого приложения.
+   * Push и Telegram-DM шлются ОБА, каждый в своём try/catch: `PushService.
+   * sendToUser` возвращает true уже по факту принятия Expo-тикета, а не
+   * подтверждённой доставки (реальный вердикт FCM/APNs приходит позже, через
+   * receipts, вне этого вызова) — полагаться на этот флаг, чтобы решать, слать
+   * ли Telegram, ненадёжно: молчаливый протухший push-токен оставлял бы
+   * покупателя вовсе без уведомления. Поэтому Telegram-DM не фолбэк, а
+   * самостоятельный канал.
    *
    * Запись в ленту идёт ПЕРВОЙ и её ошибка не глотается: в отличие от чужих
    * Expo/Telegram, локальный insert в Postgres обязан быть надёжным. Внешние
@@ -277,9 +280,10 @@ export class OrderNotifier {
 
     if (feedOnly) return;
 
+    const title = `${ORDER_TITLE[locale]} №${group.groupNumber}`;
+
     try {
-      const title = `${ORDER_TITLE[locale]} №${group.groupNumber}`;
-      const pushed = await this.push.sendToUser(group.userId, {
+      await this.push.sendToUser(group.userId, {
         title,
         body: message,
         // Тот же payload, что в ленте, — по нему тап открывает нужный экран.
@@ -289,8 +293,13 @@ export class OrderNotifier {
           status: group.status,
         },
       });
-      if (pushed) return;
+    } catch (error) {
+      this.logger.error(
+        `Push по заказу №${group.groupNumber} не ушёл: ${(error as Error).message}`,
+      );
+    }
 
+    try {
       const telegramId = await this.customerTelegramId(group.userId);
       await this.telegram.sendToCustomer(
         telegramId,
@@ -298,7 +307,7 @@ export class OrderNotifier {
       );
     } catch (error) {
       this.logger.error(
-        `Не удалось уведомить покупателя по заказу №${group.groupNumber}: ${(error as Error).message}`,
+        `Telegram-DM по заказу №${group.groupNumber} не ушёл: ${(error as Error).message}`,
       );
     }
   }
