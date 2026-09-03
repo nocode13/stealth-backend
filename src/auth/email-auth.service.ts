@@ -13,6 +13,8 @@ import { Prisma, Role, User } from '@prisma/client';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { normalizeEmail } from '../common/email';
 import { isTestAccount } from '../common/test-account';
+import { err } from '../i18n/api-error';
+import { ERRORS } from '../i18n/messages';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
@@ -85,13 +87,13 @@ export class EmailAuthService {
     if (current && isTestAccount(current.email, this.config)) {
       // Иначе тестовый аккаунт мог бы сам себе сменить email и перестать быть
       // тестовым — следующий вход по TEST_LOGIN_EMAIL завёл бы новую учётку.
-      throw new ForbiddenException('Тестовый аккаунт нельзя редактировать');
+      throw new ForbiddenException(err(ERRORS.TEST_ACCOUNT_READONLY));
     }
 
     const email = normalizeEmail(rawEmail);
     const existing = await this.users.findByEmail(email);
     if (existing && existing.id !== userId) {
-      throw new ConflictException('Этот email уже привязан к другому аккаунту');
+      throw new ConflictException(err(ERRORS.EMAIL_TAKEN));
     }
 
     await this.assertNotFlooding(email);
@@ -110,9 +112,7 @@ export class EmailAuthService {
   async verifyLink(userId: string, nonce: string, code: string): Promise<User> {
     const session = await this.claim(nonce, code);
     if (session.userId !== userId) {
-      throw new UnauthorizedException(
-        'Сессия входа не принадлежит этому аккаунту',
-      );
+      throw new UnauthorizedException(err(ERRORS.SESSION_MISMATCH));
     }
 
     try {
@@ -125,9 +125,7 @@ export class EmailAuthService {
         e instanceof Prisma.PrismaClientKnownRequestError &&
         e.code === 'P2002'
       ) {
-        throw new ConflictException(
-          'Этот email уже привязан к другому аккаунту',
-        );
+        throw new ConflictException(err(ERRORS.EMAIL_TAKEN));
       }
       throw e;
     }
@@ -143,10 +141,10 @@ export class EmailAuthService {
       where: { nonce },
     });
     if (!session || session.consumedAt || session.expiresAt < new Date()) {
-      throw new UnauthorizedException('Сессия входа устарела, начните заново');
+      throw new UnauthorizedException(err(ERRORS.SESSION_EXPIRED));
     }
     if (session.attempts >= MAX_ATTEMPTS) {
-      throw new UnauthorizedException('Слишком много попыток, начните заново');
+      throw new UnauthorizedException(err(ERRORS.TOO_MANY_ATTEMPTS));
     }
 
     if (!safeEqual(hash(code), session.codeHash)) {
@@ -160,7 +158,7 @@ export class EmailAuthService {
           data: { consumedAt: new Date() },
         });
       }
-      throw new UnauthorizedException('Неверный код');
+      throw new UnauthorizedException(err(ERRORS.INVALID_CODE));
     }
 
     const claimed = await this.prisma.emailAuthSession.updateMany({
@@ -168,7 +166,7 @@ export class EmailAuthService {
       data: { consumedAt: new Date() },
     });
     if (claimed.count === 0) {
-      throw new UnauthorizedException('Сессия входа уже использована');
+      throw new UnauthorizedException(err(ERRORS.SESSION_ALREADY_USED));
     }
 
     return session;
@@ -185,7 +183,7 @@ export class EmailAuthService {
   }): Promise<User> {
     if (session.userId) {
       const user = await this.users.findById(session.userId);
-      if (!user) throw new UnauthorizedException('Пользователь не найден');
+      if (!user) throw new UnauthorizedException(err(ERRORS.USER_NOT_FOUND));
       return user;
     }
 
@@ -208,9 +206,7 @@ export class EmailAuthService {
         e.code === 'P2002'
       ) {
         // Бэкстоп на гонку: между чтением и записью email кто-то занял.
-        throw new ConflictException(
-          'Этот email уже привязан к другому аккаунту',
-        );
+        throw new ConflictException(err(ERRORS.EMAIL_TAKEN));
       }
       throw e;
     }
@@ -254,7 +250,7 @@ export class EmailAuthService {
     expiresAt: Date,
   ): Promise<EmailSessionCreated> {
     if (!this.mail.enabled) {
-      throw new BadRequestException('Вход по почте не сконфигурирован');
+      throw new BadRequestException(err(ERRORS.EMAIL_LOGIN_DISABLED));
     }
 
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
@@ -272,7 +268,7 @@ export class EmailAuthService {
       });
       this.logger.error(`Не удалось отправить код на ${email}: ${String(e)}`);
       throw new HttpException(
-        'Не удалось отправить письмо',
+        err(ERRORS.EMAIL_SEND_FAILED),
         HttpStatus.BAD_GATEWAY,
       );
     }
@@ -291,7 +287,7 @@ export class EmailAuthService {
     if (recent >= MAX_SESSIONS_PER_WINDOW) {
       this.logger.warn(`Слишком частые попытки входа по почте ${email}`);
       throw new HttpException(
-        'Слишком много попыток входа. Попробуйте позже.',
+        err(ERRORS.EMAIL_RATE_LIMITED),
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }

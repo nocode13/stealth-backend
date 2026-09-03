@@ -1,24 +1,44 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { SellerStatus } from '@prisma/client';
+import { Locale, SellerStatus } from '@prisma/client';
+import { Type } from 'class-transformer';
 import {
+  ArrayNotEmpty,
+  IsArray,
   IsEmail,
   IsEnum,
   IsOptional,
   IsString,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 import { CursorPaginationDto } from '../../common/dto/pagination.dto';
 
-export class CreateSellerDto {
-  @ApiProperty({ example: 'Цветочная лавка' })
+export class SellerTranslationDto {
+  @ApiProperty({ enum: Locale, example: Locale.RU })
+  @IsEnum(Locale)
+  locale: Locale;
+
+  @ApiPropertyOptional({
+    example: 'Цветочная лавка',
+    description: 'Пусто = не переведено, подставится RU',
+  })
+  @IsOptional()
   @IsString()
-  @MinLength(2)
-  name: string;
+  name?: string;
 
   @ApiPropertyOptional({ example: 'Свежие цветы с доставкой по городу' })
   @IsOptional()
   @IsString()
   description?: string;
+}
+
+export class CreateSellerDto {
+  @ApiProperty({ type: [SellerTranslationDto], description: 'RU обязателен' })
+  @IsArray()
+  @ArrayNotEmpty()
+  @ValidateNested({ each: true })
+  @Type(() => SellerTranslationDto)
+  translations: SellerTranslationDto[];
 
   // Владелец продавца — логин в админку (email+пароль), заводится вместе с продавцом.
   @ApiProperty({ example: 'seller@example.com' })
@@ -38,16 +58,12 @@ export class CreateSellerDto {
 
 // Владелец не редактируется через этот DTO — его логин задаётся только при создании.
 export class UpdateSellerDto {
-  @ApiPropertyOptional({ example: 'Цветочная лавка' })
+  @ApiPropertyOptional({ type: [SellerTranslationDto] })
   @IsOptional()
-  @IsString()
-  @MinLength(2)
-  name?: string;
-
-  @ApiPropertyOptional({ example: 'Свежие цветы с доставкой по городу' })
-  @IsOptional()
-  @IsString()
-  description?: string;
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SellerTranslationDto)
+  translations?: SellerTranslationDto[];
 
   @ApiPropertyOptional({ enum: SellerStatus })
   @IsOptional()

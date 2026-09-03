@@ -96,9 +96,11 @@ src/
   `sellerId` заполнен → продавец предложил свою, `PENDING` до апрува (`PATCH …/:id/status`).
   После апрува доступна для выбора/листинга **только этому продавцу** (наряду с master), но
   на витрине мобилки видны **все** `APPROVED` — ограничение касается создания, не показа.
-  `Category`: `nameRu` (обязательное, фолбэк) + `nameUz?/nameEn?/nameKaa?`.
-  `CatalogItem`: `categoryId?` (nullable, `Restrict`), `unit` (дефолт «шт»), галерея
-  `images: CatalogItemImage[]`. Общий enum `ReviewStatus`. `freeDelivery: Boolean` —
+  `Category`/`CatalogItem`/`Seller` мультиязычны — название/описание/единица живут не
+  колонками на самой сущности, а в отдельных таблицах переводов (`CategoryTranslation`,
+  `CatalogItemTranslation`, `SellerTranslation`), см. «Мультиязычность» ниже.
+  `CatalogItem`: `categoryId?` (nullable, `Restrict`), галерея `media: CatalogItemMedia[]`.
+  Общий enum `ReviewStatus`. `freeDelivery: Boolean` —
   вайтлист бесплатной доставки, ставит только `SUPER_ADMIN` (см. «Доставка» ниже).
 - **Listing** — предложение продавца поверх позиции: `price`, `stock`, `status`
   (`DRAFT|ACTIVE|ARCHIVED`), `@@unique([sellerId, catalogItemId])`. При создании
@@ -143,6 +145,61 @@ src/
 **реально изменился**: иначе каскад по нескольким заказам группы за одну операцию
 (`changeGroupStatus`, `cancelMyGroup`) плодил бы запись на каждый задетый заказ вместо одной
 на фактический переход.
+
+## Мультиязычность
+
+Локали контента — `RU`/`UZ`/`EN` (enum `Locale`), `RU` — дефолт и фолбэк. `kaa` в продукте
+не участвует.
+
+**Хранение — таблица переводов на сущность**, не колонки `nameRu/nameUz/...`:
+`CategoryTranslation`/`CatalogItemTranslation`/`SellerTranslation`, `@@unique([<entity>Id,
+locale])`. Инвариант: у каждой сущности строка перевода есть **для каждой локали всегда** —
+сервис при создании/обновлении дописывает недостающие значением `RU` и ставит `auto: true`
+(«перевод не задан, это копия русского» — админка рисует такое поле пустым). Это же снимает
+фолбэк-логику с пути чтения и делает возможной сортировку/курсорную пагинацию по имени:
+Prisma не умеет `orderBy` по to-many-связи, поэтому список на нужном языке (`findStorefront`
+у категорий/каталога) строится **запросом от таблицы переводов**, а не от самой сущности.
+
+**Локаль приходит только заголовком `Accept-Language`** (`src/i18n/locale.ts:
+parseAcceptLanguage`, сопоставляет BCP-47 тег по первичному сабтегу, всё незнакомое → `RU`).
+Query-параметра `lang` нет — глобальный `ValidationPipe({ forbidNonWhitelisted })` отверг бы
+его 400-й. `@ReqLocale()` (`src/common/decorators/locale.decorator.ts`) ставится **только**
+в контроллерах `src/mobile/`; `src/admin/` всегда передаёт `DEFAULT_LOCALE` явно — иначе
+админ с английским браузером увидел бы английские названия. Ответ мобилке — плоский резолв
+(`pickTranslation`, `src/i18n/pick.ts`): одно поле `name`/`description`/`unit`, ни одной
+локали в контракте; ответ админке — резолв на `DEFAULT_LOCALE` плюс массив `translations`
+для формы редактирования (мапперы `to<Entity>Response`/`toAdmin<Entity>Response`, живут
+рядом с доменом — `category.response.ts`, `catalog.response.ts`, `seller.response.ts`,
+по прецеденту `orders/order.response.ts`).
+
+⚠️ **Локаль обязана входить в ключ Redis-кэша.** `CacheService.wrap(ns, params, fn)` ключует
+только по `params` — без локали в `params` три языка схлопнутся в один кэш-ключ. Правило:
+везде, где есть `cache.wrap` на локализуемых данных, в `params` добавляется `locale`
+(`{ ...query, locale }` у списков, `{ id, locale }` у одиночных сущностей).
+
+**`OrderItem` — снапшот сразу по всем локалям**, JSON вместо строки
+(`catalogItemName`/`unit: Json`, `src/i18n/localized-text.ts`: `toLocalizedText`/`pickText`).
+Причина: снапшот заказа обязан пережить смену языка пользователем, поэтому на момент
+оформления в БД кладётся объект `{ RU, UZ, EN }` сразу, а не строка на одном языке.
+
+**`User.locale`** — язык пушей и Telegram-DM: они уходят вне HTTP-запроса, заголовка
+`Accept-Language` там нет. Проставляется `POST /mobile/auth/locale` (без тела — локаль берёт
+из того же заголовка, что и остальные запросы, вызывается мобилкой после логина и на смену
+языка интерфейса); `null` = ещё не сообщён, используется `DEFAULT_LOCALE`.
+`CUSTOMER_GROUP_STATUS_MESSAGES`/`ORDER_TITLE` (`src/orders/order-status.ts`) ключуются
+локалью — `OrderNotifier.groupStatusChanged` резолвит её из `User.locale` (см.
+«Уведомления»).
+
+**Ошибки API.** `src/i18n/messages.ts` (`ERRORS`/`ERROR_MESSAGES`/`translateError`) + `err()`
+(`src/i18n/api-error.ts`) — сервис бросает `throw new BadRequestException(err(ERRORS.KEY,
+params?))` вместо русской строки, `LocalizedExceptionFilter`
+(`src/common/filters/localized-exception.filter.ts`, **первый и единственный глобальный
+фильтр в проекте**, `APP_FILTER` в `app.module.ts`) переводит `messageKey` по
+`Accept-Language` в момент ответа. Правило границы: переводятся только ошибки, которые видит
+**мобилка** — админские (`'Чужая категория продавца'`, `'Недостаточно прав'` и т.п.) остаются
+обычными русскими строками, заводить перевод для всех ~90 мест `throw new *Exception` в
+проекте не нужно. Тело нелокализованных ошибок (обычная строка, массив от `ValidationPipe`)
+фильтр пропускает как есть.
 
 ## API
 
@@ -263,9 +320,12 @@ Payme/Click — добавлением значений в енам; `providerTx
 что единица заказа в мобилке: плоских `/mobile/orders` нет, и каскад `changeGroupStatus` по трём
 продавцам обязан дать **одно** сообщение «заказ едет», а не три с разными `orderNumber`.
 `OrderNotifier.groupStatusChanged(group, { feedOnly? })` шлёт лента+push+Telegram, тексты —
-`CUSTOMER_GROUP_STATUS_MESSAGES` (`src/orders/order-status.ts`, ключуется `OrderGroupStatus`,
-поэтому есть и `PARTIALLY_DELIVERED`; `NEW` не шлётся — покупатель сам только что оформил).
-Заголовок и DM — `Заказ №<groupNumber>` (`№` = группа, `#` = `Order`, как в карточках бота).
+`CUSTOMER_GROUP_STATUS_MESSAGES` (`src/orders/order-status.ts`, ключуется **сначала
+`Locale`, потом** `OrderGroupStatus`, поэтому есть и `PARTIALLY_DELIVERED`; `NEW` не шлётся —
+покупатель сам только что оформил). Язык резолвится из `User.locale` (пуши/DM уходят вне
+HTTP-запроса, заголовка `Accept-Language` там нет — см. «Мультиязычность»), `null` →
+`DEFAULT_LOCALE`. Заголовок и DM — `${ORDER_TITLE[locale]} №<groupNumber>` (`№` = группа,
+`#` = `Order`, как в карточках бота).
 
 ⚠️ Условие отправки — **реальная смена выведенного статуса группы**, тот же инвариант, что у
 `OrderGroupStatusHistory`. Проверку делает `OrdersService`, а не нотифаер: сравнивается
@@ -526,13 +586,19 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
   строкой — для HTTP-ответа нормально, как Prisma-сущность использовать нельзя.
 - `bump()` зовут все мутации каталога/категорий/листингов/продавца и заказы — ⚠️ **после
   коммита**: изнутри транзакции кэш успел бы перезаполниться доккоммитными данными.
+- ⚠️ **Локаль обязана входить в `params`** везде, где кэшируются локализуемые данные
+  (категории, каталог, листинги, продавец) — иначе три языка (`RU`/`UZ`/`EN`) схлопнутся в
+  один ключ и будут отдавать друг другу чужой текст, см. «Мультиязычность» выше.
 
 **Курсорная пагинация** (`src/common/pagination.ts`, `CursorPaginationDto`): `cursor?` (id
 последнего элемента) + `limit` (1..100, дефолт 20) → `{ items, nextCursor }`. Контракт: сервис
 обязан запрашивать `take: limit + 1` (лишняя строка — признак «есть ещё», `toCursorPage` её
 срезает) и держать `orderBy`, **заканчивающийся на `id`** — только это делает курсор
 детерминированным. Используют listings, catalog, categories, orders, sellers; лента
-уведомлений идёт по своему `seq` и этот контракт не использует.
+уведомлений идёт по своему `seq` и этот контракт не использует. ⚠️ Витрина категорий/каталога
+на публичных эндпоинтах (`findStorefront`/`findAll`) строится запросом **от таблицы
+переводов**, а не от самой сущности (Prisma не умеет `orderBy` по to-many) — курсор при этом
+остаётся id сущности, не id строки перевода, контракт `CursorPage` не меняется.
 
 ## Фото
 
@@ -629,3 +695,14 @@ Buckets приватные и публичных URL не дают, а ссыл�
   владельцу; заблокировавший бота сотрудник не мешает доставке остальным; сотрудник без
   привязки просто пропускается; рядовой сотрудник получает 403 на `…/staff`, владелец чужого
   продавца — тоже; владельца удалить нельзя (400).
+- мультиязычность: `GET /mobile/categories`/`catalog`/`listings` с `Accept-Language: ru|uz|en`
+  отдают плоское `name`/`description`/`unit` на нужном языке, без `nameRu`; без заголовка — RU;
+  запрос `ru` → `uz` → `ru` не путает языки (в Redis `KEYS 'sf:*'` три разных ключа на три
+  локали); курсорная пагинация по имени работает без дублей/пропусков на каждом языке;
+  создание категории только с RU-названием → в ответе админки `translations` содержат
+  `auto: true` для UZ/EN, а мобилка с `Accept-Language: uz` показывает русское имя (фолбэк);
+  ошибка (`add to cart` сверх остатка, 404 и т.п.) переведена по `Accept-Language`, ошибки
+  админских путей остаются русскими; заказ, оформленный на одном языке, читается на другом —
+  `catalogItemName`/`unit` в ответе меняются, а `order_items` в БД хранит JSON по всем трём
+  сразу; `POST /mobile/auth/locale` проставляет `User.locale`, и следующий пуш/Telegram-DM
+  по смене статуса заказа уходит на этом языке.

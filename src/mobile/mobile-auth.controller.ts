@@ -12,6 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Locale } from '@prisma/client';
 import { AuthService } from '../auth/auth.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RefreshDto } from '../auth/dto/auth.dto';
@@ -21,6 +22,7 @@ import { TelegramMiniAppDto, UpdateProfileDto } from '../auth/dto/telegram.dto';
 import { TelegramAuthService } from '../telegram/telegram-auth.service';
 import { UsersService } from '../users/users.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { ReqLocale } from '../common/decorators/locale.decorator';
 
 // Аутентификация мобилки: вход через Telegram или по коду на почту (Resend),
 // access + refresh токены.
@@ -178,5 +180,23 @@ export class MobileAuthController {
   async logout(@Body() dto: RefreshDto) {
     await this.auth.revokeRefreshToken(dto.refreshToken);
     return { success: true };
+  }
+
+  @Post('locale')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Запомнить язык для пушей и Telegram-сообщений',
+    description:
+      'Тела нет: язык берётся из того же Accept-Language, что и у остальных запросов — ' +
+      'так между заголовком и сохранённым значением не может быть рассинхрона. ' +
+      'Пуши уходят вне HTTP-запроса, поэтому язык нужен в БД.',
+  })
+  async setLocale(
+    @CurrentUser('id') userId: string,
+    @ReqLocale() locale: Locale,
+  ) {
+    await this.users.setLocale(userId, locale);
   }
 }

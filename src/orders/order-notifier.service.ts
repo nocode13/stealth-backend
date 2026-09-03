@@ -1,17 +1,26 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Role, type OrderGroup, type OrderStatus } from '@prisma/client';
+import {
+  Role,
+  type Locale,
+  type OrderGroup,
+  type OrderStatus,
+} from '@prisma/client';
 import { InlineKeyboard } from 'grammy';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramNotifyService } from '../telegram/telegram-notify.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PushService } from '../push/push.service';
+import { DEFAULT_LOCALE } from '../i18n/locale';
+import { pickText } from '../i18n/localized-text';
+import { pickTranslation } from '../i18n/pick';
 import type { OrderGroupWithOrders, OrderWithDetails } from './orders.service';
 import {
   ALLOWED_TRANSITIONS,
   CUSTOMER_GROUP_STATUS_MESSAGES,
   ORDER_ACTION_LABELS,
   ORDER_STATUS_LABELS,
+  ORDER_TITLE,
   isTerminal,
 } from './order-status';
 
@@ -74,8 +83,8 @@ export class OrderNotifier {
       '',
       ...order.items.map(
         (item) =>
-          `• ${escapeHtml(item.catalogItemName)} — ${item.quantity} ${escapeHtml(
-            item.unit,
+          `• ${escapeHtml(pickText(item.catalogItemName, DEFAULT_LOCALE))} — ${item.quantity} ${escapeHtml(
+            pickText(item.unit, DEFAULT_LOCALE),
           )} × ${money(item.price)} = ${money(item.total)}`,
       ),
       '',
@@ -150,11 +159,12 @@ export class OrderNotifier {
       `<b>Группа №${group.groupNumber}</b>`,
       '',
       ...group.orders.flatMap((order) => [
-        `<b>${escapeHtml(order.seller.name)}</b> — ${ORDER_STATUS_LABELS[order.status]}`,
+        // Кабинет SUPER_ADMIN в боте русскоязычный — локаль не резолвим.
+        `<b>${escapeHtml(pickTranslation(order.seller.translations, DEFAULT_LOCALE).name)}</b> — ${ORDER_STATUS_LABELS[order.status]}`,
         ...order.items.map(
           (item) =>
-            `• ${escapeHtml(item.catalogItemName)} — ${item.quantity} ${escapeHtml(
-              item.unit,
+            `• ${escapeHtml(pickText(item.catalogItemName, DEFAULT_LOCALE))} — ${item.quantity} ${escapeHtml(
+              pickText(item.unit, DEFAULT_LOCALE),
             )} × ${money(item.price)} = ${money(item.total)}`,
         ),
         `Сумма: ${money(order.itemsTotal)}`,
@@ -253,7 +263,10 @@ export class OrderNotifier {
     group: Pick<OrderGroup, 'id' | 'userId' | 'groupNumber' | 'status'>,
     { feedOnly = false }: { feedOnly?: boolean } = {},
   ): Promise<void> {
-    const message = CUSTOMER_GROUP_STATUS_MESSAGES[group.status];
+    // Пуши и Telegram-DM уходят вне HTTP-запроса — Accept-Language там нет,
+    // поэтому язык берём из User.locale (POST /mobile/auth/locale).
+    const locale = await this.customerLocale(group.userId);
+    const message = CUSTOMER_GROUP_STATUS_MESSAGES[locale][group.status];
     if (!message) return;
 
     await this.notifications.orderGroupStatusChanged(group.userId, {
@@ -265,8 +278,9 @@ export class OrderNotifier {
     if (feedOnly) return;
 
     try {
+      const title = `${ORDER_TITLE[locale]} №${group.groupNumber}`;
       const pushed = await this.push.sendToUser(group.userId, {
-        title: `Заказ №${group.groupNumber}`,
+        title,
         body: message,
         // Тот же payload, что в ленте, — по нему тап открывает нужный экран.
         data: {
@@ -280,7 +294,7 @@ export class OrderNotifier {
       const telegramId = await this.customerTelegramId(group.userId);
       await this.telegram.sendToCustomer(
         telegramId,
-        `<b>Заказ №${group.groupNumber}</b>\n${message}`,
+        `<b>${title}</b>\n${message}`,
       );
     } catch (error) {
       this.logger.error(
@@ -365,5 +379,14 @@ export class OrderNotifier {
       select: { telegramId: true },
     });
     return user?.telegramId ?? null;
+  }
+
+  /** User.locale — null, пока мобилка ни разу не позвала POST /mobile/auth/locale. */
+  private async customerLocale(userId: string): Promise<Locale> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { locale: true },
+    });
+    return user?.locale ?? DEFAULT_LOCALE;
   }
 }

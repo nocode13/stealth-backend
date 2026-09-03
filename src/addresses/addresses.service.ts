@@ -5,6 +5,8 @@ import {
 } from '@nestjs/common';
 import { SavedAddress } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { err } from '../i18n/api-error';
+import { ERRORS } from '../i18n/messages';
 import { CreateAddressDto, UpdateAddressDto } from './dto/address.dto';
 
 @Injectable()
@@ -41,9 +43,9 @@ export class AddressesService {
     const address = await this.prisma.savedAddress.findUnique({
       where: { id },
     });
-    if (!address) throw new NotFoundException('Адрес не найден');
+    if (!address) throw new NotFoundException(err(ERRORS.ADDRESS_NOT_FOUND));
     if (address.userId !== userId) {
-      throw new ForbiddenException('Чужой адрес');
+      throw new ForbiddenException(err(ERRORS.FOREIGN_ADDRESS));
     }
     return address;
   }

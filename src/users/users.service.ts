@@ -5,11 +5,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { OrderStatus, Prisma, Role, User } from '@prisma/client';
+import { Locale, OrderStatus, Prisma, Role, User } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone } from '../common/phone';
 import { isTestAccount } from '../common/test-account';
+import { err } from '../i18n/api-error';
+import { ERRORS } from '../i18n/messages';
 import { isTerminal } from '../orders/order-status';
 
 @Injectable()
@@ -121,9 +123,9 @@ export class UsersService {
     data: { name?: string; phone?: string },
   ): Promise<User> {
     const current = await this.findById(userId);
-    if (!current) throw new NotFoundException('Пользователь не найден');
+    if (!current) throw new NotFoundException(err(ERRORS.USER_NOT_FOUND));
     if (isTestAccount(current.email, this.config)) {
-      throw new ForbiddenException('Тестовый аккаунт нельзя редактировать');
+      throw new ForbiddenException(err(ERRORS.TEST_ACCOUNT_READONLY));
     }
 
     const normalize = (v: string | undefined) =>
@@ -137,7 +139,7 @@ export class UsersService {
         phone !== null &&
         normalizePhone(phone) === normalizePhone(current.phone);
       if (!same) {
-        throw new ForbiddenException('Номер телефона изменить нельзя');
+        throw new ForbiddenException(err(ERRORS.PHONE_IMMUTABLE));
       }
     }
 
@@ -156,13 +158,19 @@ export class UsersService {
         e instanceof Prisma.PrismaClientKnownRequestError &&
         e.code === 'P2002'
       ) {
-        // target — список полей, нарушивших unique-индекс.
-        const target = (e.meta?.target as string[] | undefined) ?? [];
-        const field = target.includes('phone') ? 'Этот телефон' : 'Эти данные';
-        throw new ConflictException(`${field} уже привязан к другому аккаунту`);
+        // Единственное уникальное поле в этом апдейте — phone (name не unique).
+        throw new ConflictException(err(ERRORS.PHONE_TAKEN));
       }
       throw e;
     }
+  }
+
+  /** Язык уведомлений (пуши/Telegram-DM) — они уходят вне HTTP-запроса, заголовка там нет. */
+  async setLocale(userId: string, locale: Locale): Promise<void> {
+    await this.prisma.user.updateMany({
+      where: { id: userId, locale: { not: locale } },
+      data: { locale },
+    });
   }
 
   // Удаление аккаунта покупателя (требование Google Play: приложение с регистрацией
@@ -177,10 +185,10 @@ export class UsersService {
   // Активные заказы блокируют удаление: без телефона и адреса курьер не доедет.
   async deleteAccount(userId: string): Promise<void> {
     const user = await this.findById(userId);
-    if (!user) throw new NotFoundException('Пользователь не найден');
+    if (!user) throw new NotFoundException(err(ERRORS.USER_NOT_FOUND));
     if (user.deletedAt) return; // идемпотентно: повтор не ошибка
     if (isTestAccount(user.email, this.config)) {
-      throw new ForbiddenException('Тестовый аккаунт нельзя удалить');
+      throw new ForbiddenException(err(ERRORS.TEST_ACCOUNT_NO_DELETE));
     }
 
     // Список нетерминальных статусов выводим из ALLOWED_TRANSITIONS, а не
@@ -192,9 +200,7 @@ export class UsersService {
       where: { userId, status: { in: activeStatuses } },
     });
     if (active > 0) {
-      throw new ConflictException(
-        'Сначала завершите или отмените активные заказы',
-      );
+      throw new ConflictException(err(ERRORS.ACTIVE_ORDERS_BLOCK_DELETE));
     }
 
     await this.prisma.$transaction([
