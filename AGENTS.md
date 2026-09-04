@@ -190,6 +190,13 @@ Query-параметра `lang` нет — глобальный `ValidationPipe(
 локалью — `OrderNotifier.groupStatusChanged` резолвит её из `User.locale` (см.
 «Уведомления»).
 
+⚠️ **Колонка nullable и без дефолта, а Prisma компилирует `not` в голое `locale <> $1`** —
+NULL под такой предикат не попадает. Поэтому любой фильтр «язык отличается» обязан включать
+`{ locale: null }` явно (`OR: [{ locale: null }, { locale: { not: locale } }]`, см.
+`UsersService.setLocale`): без этого первая — единственно важная — запись языка матчила 0 строк,
+`updateMany` при этом не бросает, эндпоинт отвечал 204, и пуши с Telegram-DM навсегда
+оставались на `DEFAULT_LOCALE`. Тот же вопрос задавать себе на каждой nullable-колонке.
+
 **Ошибки API.** `src/i18n/messages.ts` (`ERRORS`/`ERROR_MESSAGES`/`translateError`) + `err()`
 (`src/i18n/api-error.ts`) — сервис бросает `throw new BadRequestException(err(ERRORS.KEY,
 params?))` вместо русской строки, `LocalizedExceptionFilter`
@@ -710,4 +717,7 @@ Buckets приватные и публичных URL не дают, а ссыл�
   админских путей остаются русскими; заказ, оформленный на одном языке, читается на другом —
   `catalogItemName`/`unit` в ответе меняются, а `order_items` в БД хранит JSON по всем трём
   сразу; `POST /mobile/auth/locale` проставляет `User.locale`, и следующий пуш/Telegram-DM
-  по смене статуса заказа уходит на этом языке.
+  по смене статуса заказа уходит на этом языке. ⚠️ Проверять именно **значение в БД**
+  (`select locale from users where id = …`), а не 204 от эндпоинта: `updateMany` при нулевом
+  совпадении не ошибка, и сломанный фильтр выглядит как успешный запрос — юзеру с ещё не
+  проставленным (`NULL`) языком первый же вызов обязан записать не-NULL.

@@ -168,7 +168,12 @@ export class UsersService {
   /** Язык уведомлений (пуши/Telegram-DM) — они уходят вне HTTP-запроса, заголовка там нет. */
   async setLocale(userId: string, locale: Locale): Promise<void> {
     await this.prisma.user.updateMany({
-      where: { id: userId, locale: { not: locale } },
+      // ⚠️ Одного `locale: { not: locale }` тут НЕ хватает: колонка nullable, и Prisma
+      // компилирует такой фильтр в голое `locale <> $1`, под которое NULL не попадает.
+      // А NULL — ровно то, что стоит у юзера до первой синхронизации языка, поэтому
+      // первая (и единственно важная) запись молча матчила 0 строк, updateMany не
+      // бросал, эндпоинт отвечал 204, а уведомления навсегда оставались на RU.
+      where: { id: userId, OR: [{ locale: null }, { locale: { not: locale } }] },
       data: { locale },
     });
   }
