@@ -173,7 +173,10 @@ export class UsersService {
       // А NULL — ровно то, что стоит у юзера до первой синхронизации языка, поэтому
       // первая (и единственно важная) запись молча матчила 0 строк, updateMany не
       // бросал, эндпоинт отвечал 204, а уведомления навсегда оставались на RU.
-      where: { id: userId, OR: [{ locale: null }, { locale: { not: locale } }] },
+      where: {
+        id: userId,
+        OR: [{ locale: null }, { locale: { not: locale } }],
+      },
       data: { locale },
     });
   }
