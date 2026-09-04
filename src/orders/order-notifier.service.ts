@@ -1,17 +1,26 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Role, type OrderGroup, type OrderStatus } from '@prisma/client';
+import {
+  Role,
+  type Locale,
+  type OrderGroup,
+  type OrderStatus,
+} from '@prisma/client';
 import { InlineKeyboard } from 'grammy';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramNotifyService } from '../telegram/telegram-notify.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PushService } from '../push/push.service';
+import { DEFAULT_LOCALE } from '../i18n/locale';
+import { pickText } from '../i18n/localized-text';
+import { pickTranslation } from '../i18n/pick';
 import type { OrderGroupWithOrders, OrderWithDetails } from './orders.service';
 import {
   ALLOWED_TRANSITIONS,
   CUSTOMER_GROUP_STATUS_MESSAGES,
   ORDER_ACTION_LABELS,
   ORDER_STATUS_LABELS,
+  ORDER_TITLE,
   isTerminal,
 } from './order-status';
 
@@ -74,8 +83,8 @@ export class OrderNotifier {
       '',
       ...order.items.map(
         (item) =>
-          `• ${escapeHtml(item.catalogItemName)} — ${item.quantity} ${escapeHtml(
-            item.unit,
+          `• ${escapeHtml(pickText(item.catalogItemName, DEFAULT_LOCALE))} — ${item.quantity} ${escapeHtml(
+            pickText(item.unit, DEFAULT_LOCALE),
           )} × ${money(item.price)} = ${money(item.total)}`,
       ),
       '',
@@ -150,11 +159,12 @@ export class OrderNotifier {
       `<b>Группа №${group.groupNumber}</b>`,
       '',
       ...group.orders.flatMap((order) => [
-        `<b>${escapeHtml(order.seller.name)}</b> — ${ORDER_STATUS_LABELS[order.status]}`,
+        // Кабинет SUPER_ADMIN в боте русскоязычный — локаль не резолвим.
+        `<b>${escapeHtml(pickTranslation(order.seller.translations, DEFAULT_LOCALE).name)}</b> — ${ORDER_STATUS_LABELS[order.status]}`,
         ...order.items.map(
           (item) =>
-            `• ${escapeHtml(item.catalogItemName)} — ${item.quantity} ${escapeHtml(
-              item.unit,
+            `• ${escapeHtml(pickText(item.catalogItemName, DEFAULT_LOCALE))} — ${item.quantity} ${escapeHtml(
+              pickText(item.unit, DEFAULT_LOCALE),
             )} × ${money(item.price)} = ${money(item.total)}`,
         ),
         `Сумма: ${money(order.itemsTotal)}`,
@@ -233,12 +243,15 @@ export class OrderNotifier {
    *    работает как Telegram Mini App, и сообщение бота приходит в чат ПОД ней,
    *    поэтому юзер, не сворачивая приложение, его не увидит.
    * 2. Push — если у юзера есть хоть одна установка нативного приложения.
-   * 3. Telegram-сообщение — ИНАЧЕ, для тех, у кого нативки нет (Mini App, веб).
+   * 3. Telegram-сообщение — независимо от пункта 2, каждый раз.
    *
-   * Пункты 2 и 3 взаимоисключающие намеренно: с пушем Telegram-DM был бы вторым
-   * уведомлением об одном событии. Мёртвые токены вычищает PushService по
-   * receipts, так что «есть токен» означает живую установку, а не след от
-   * удалённого приложения.
+   * Push и Telegram-DM шлются ОБА, каждый в своём try/catch: `PushService.
+   * sendToUser` возвращает true уже по факту принятия Expo-тикета, а не
+   * подтверждённой доставки (реальный вердикт FCM/APNs приходит позже, через
+   * receipts, вне этого вызова) — полагаться на этот флаг, чтобы решать, слать
+   * ли Telegram, ненадёжно: молчаливый протухший push-токен оставлял бы
+   * покупателя вовсе без уведомления. Поэтому Telegram-DM не фолбэк, а
+   * самостоятельный канал.
    *
    * Запись в ленту идёт ПЕРВОЙ и её ошибка не глотается: в отличие от чужих
    * Expo/Telegram, локальный insert в Postgres обязан быть надёжным. Внешние
@@ -253,7 +266,10 @@ export class OrderNotifier {
     group: Pick<OrderGroup, 'id' | 'userId' | 'groupNumber' | 'status'>,
     { feedOnly = false }: { feedOnly?: boolean } = {},
   ): Promise<void> {
-    const message = CUSTOMER_GROUP_STATUS_MESSAGES[group.status];
+    // Пуши и Telegram-DM уходят вне HTTP-запроса — Accept-Language там нет,
+    // поэтому язык берём из User.locale (POST /mobile/auth/locale).
+    const locale = await this.customerLocale(group.userId);
+    const message = CUSTOMER_GROUP_STATUS_MESSAGES[locale][group.status];
     if (!message) return;
 
     await this.notifications.orderGroupStatusChanged(group.userId, {
@@ -264,9 +280,11 @@ export class OrderNotifier {
 
     if (feedOnly) return;
 
+    const title = `${ORDER_TITLE[locale]} №${group.groupNumber}`;
+
     try {
-      const pushed = await this.push.sendToUser(group.userId, {
-        title: `Заказ №${group.groupNumber}`,
+      await this.push.sendToUser(group.userId, {
+        title,
         body: message,
         // Тот же payload, что в ленте, — по нему тап открывает нужный экран.
         data: {
@@ -275,16 +293,21 @@ export class OrderNotifier {
           status: group.status,
         },
       });
-      if (pushed) return;
+    } catch (error) {
+      this.logger.error(
+        `Push по заказу №${group.groupNumber} не ушёл: ${(error as Error).message}`,
+      );
+    }
 
+    try {
       const telegramId = await this.customerTelegramId(group.userId);
       await this.telegram.sendToCustomer(
         telegramId,
-        `<b>Заказ №${group.groupNumber}</b>\n${message}`,
+        `<b>${title}</b>\n${message}`,
       );
     } catch (error) {
       this.logger.error(
-        `Не удалось уведомить покупателя по заказу №${group.groupNumber}: ${(error as Error).message}`,
+        `Telegram-DM по заказу №${group.groupNumber} не ушёл: ${(error as Error).message}`,
       );
     }
   }
@@ -365,5 +388,14 @@ export class OrderNotifier {
       select: { telegramId: true },
     });
     return user?.telegramId ?? null;
+  }
+
+  /** User.locale — null, пока мобилка ни разу не позвала POST /mobile/auth/locale. */
+  private async customerLocale(userId: string): Promise<Locale> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { locale: true },
+    });
+    return user?.locale ?? DEFAULT_LOCALE;
   }
 }

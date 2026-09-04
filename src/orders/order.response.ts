@@ -1,10 +1,13 @@
 import type {
+  Locale,
   OrderGroupStatus,
   OrderStatus,
   PaymentMethod,
   PaymentStatus,
 } from '@prisma/client';
 import type { StorageService } from '../storage/storage.service';
+import { pickText } from '../i18n/localized-text';
+import { pickTranslation } from '../i18n/pick';
 import type { OrderGroupWithOrders, OrderWithDetails } from './orders.service';
 
 // Prisma отдаёт сущность как есть, а её колонки — не то же самое, что API-контракт:
@@ -79,20 +82,24 @@ export interface OrderGroupResponse {
 export const toOrderResponse = (
   o: OrderWithDetails,
   storage: StorageService,
+  locale: Locale,
 ): OrderResponse => ({
   id: o.id,
   orderNumber: o.orderNumber,
   status: o.status,
-  seller: o.seller,
+  seller: {
+    id: o.seller.id,
+    name: pickTranslation(o.seller.translations, locale).name,
+  },
   itemsTotal: o.itemsTotal,
   courierName: o.courierName,
   courierPhone: o.courierPhone,
   cancelReason: o.cancelReason,
   items: o.items.map((item) => ({
     id: item.id,
-    catalogItemName: item.catalogItemName,
+    catalogItemName: pickText(item.catalogItemName, locale),
     catalogItemImageUrl: storage.getUrlOrNull(item.catalogItemImageUrl),
-    unit: item.unit,
+    unit: pickText(item.unit, locale),
     price: item.price,
     quantity: item.quantity,
     total: item.total,
@@ -111,6 +118,7 @@ export const toOrderResponse = (
 export const toOrderGroupResponse = (
   g: OrderGroupWithOrders,
   storage: StorageService,
+  locale: Locale,
 ): OrderGroupResponse => ({
   id: g.id,
   groupNumber: g.groupNumber,
@@ -128,7 +136,7 @@ export const toOrderGroupResponse = (
   total: g.total,
   ordersCount: g.orders.length,
   createdAt: g.createdAt,
-  orders: g.orders.map((o) => toOrderResponse(o, storage)),
+  orders: g.orders.map((o) => toOrderResponse(o, storage, locale)),
   history: g.history.map((h) => ({
     id: h.id,
     status: h.status,
@@ -145,8 +153,9 @@ export const toOrderGroupResponse = (
 export const toSellerOrderGroupResponse = (
   g: OrderGroupWithOrders,
   storage: StorageService,
+  locale: Locale,
 ): OrderGroupResponse => {
-  const base = toOrderGroupResponse(g, storage);
+  const base = toOrderGroupResponse(g, storage, locale);
   const itemsTotal = base.orders.reduce((sum, o) => sum + o.itemsTotal, 0);
   return { ...base, itemsTotal, deliveryFee: 0, total: itemsTotal };
 };

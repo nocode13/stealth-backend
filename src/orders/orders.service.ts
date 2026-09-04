@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  Locale,
   ListingStatus,
   MediaStatus,
   MediaType,
@@ -20,6 +21,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AddressesService } from '../addresses/addresses.service';
 import { CacheService } from '../cache/cache.service';
 import { SettingsService } from '../settings/settings.service';
+import { err } from '../i18n/api-error';
+import { DEFAULT_LOCALE } from '../i18n/locale';
+import { toLocalizedText } from '../i18n/localized-text';
+import { ERRORS } from '../i18n/messages';
+import { pickTranslation } from '../i18n/pick';
 import { OrderNotifier } from './order-notifier.service';
 import {
   CancelOrderDto,
@@ -45,7 +51,7 @@ import {
 const withDetails = {
   items: true,
   history: { orderBy: { createdAt: 'asc' } },
-  seller: { select: { id: true, name: true } },
+  seller: { select: { id: true, translations: true } },
   group: true,
 } satisfies Prisma.OrderInclude;
 
@@ -109,6 +115,7 @@ export class OrdersService {
   async createFromCart(
     userId: string,
     dto: CreateOrderDto,
+    locale: Locale,
   ): Promise<OrderGroupWithOrders> {
     const cartItems = await this.prisma.cartItem.findMany({
       where: { userId },
@@ -119,6 +126,7 @@ export class OrdersService {
               // Вся готовая галерея, а не take: 1 — в снапшот заказа нужна
               // картинка, а первым медиа может оказаться видео (см. coverUrl).
               include: {
+                translations: true,
                 media: {
                   where: { status: MediaStatus.READY },
                   orderBy: { sortOrder: 'asc' },
@@ -131,7 +139,7 @@ export class OrdersService {
       orderBy: { createdAt: 'asc' },
     });
     if (cartItems.length === 0) {
-      throw new BadRequestException('Корзина пуста');
+      throw new BadRequestException(err(ERRORS.CART_EMPTY));
     }
 
     // savedAddressId — источник правды для снапшота ниже, сырые deliveryAddress/...
@@ -149,13 +157,16 @@ export class OrdersService {
     // товара. Финальную защиту от гонки даёт условный decrement ниже.
     for (const item of cartItems) {
       const { listing } = item;
-      const name = listing.catalogItem.name;
+      const name = pickTranslation(
+        listing.catalogItem.translations,
+        locale,
+      ).name;
       if (listing.status !== ListingStatus.ACTIVE) {
-        throw new BadRequestException(`«${name}» больше не продаётся`);
+        throw new BadRequestException(err(ERRORS.ITEM_SOLD_OUT, { name }));
       }
       if (item.quantity > listing.stock) {
         throw new BadRequestException(
-          `«${name}»: в наличии только ${listing.stock}`,
+          err(ERRORS.ITEM_STOCK_LIMITED, { name, stock: listing.stock }),
         );
       }
     }
@@ -208,7 +219,12 @@ export class OrdersService {
           });
           if (claimed.count === 0) {
             throw new BadRequestException(
-              `«${item.listing.catalogItem.name}» разобрали, пока вы оформляли заказ`,
+              err(ERRORS.ITEM_TAKEN_DURING_CHECKOUT, {
+                name: pickTranslation(
+                  item.listing.catalogItem.translations,
+                  locale,
+                ).name,
+              }),
             );
           }
         }
@@ -227,9 +243,15 @@ export class OrdersService {
             items: {
               create: items.map((item) => ({
                 listingId: item.listingId,
-                catalogItemName: item.listing.catalogItem.name,
+                catalogItemName: toLocalizedText(
+                  item.listing.catalogItem.translations,
+                  'name',
+                ),
                 catalogItemImageUrl: coverUrl(item.listing.catalogItem.media),
-                unit: item.listing.catalogItem.unit,
+                unit: toLocalizedText(
+                  item.listing.catalogItem.translations,
+                  'unit',
+                ),
                 price: item.listing.price,
                 quantity: item.quantity,
                 total: item.listing.price * item.quantity,
@@ -351,7 +373,8 @@ export class OrdersService {
     id: string,
   ): Promise<OrderGroupWithOrders> {
     const group = await this.findGroupOrFail(id);
-    if (group.userId !== userId) throw new ForbiddenException('Чужой заказ');
+    if (group.userId !== userId)
+      throw new ForbiddenException(err(ERRORS.FOREIGN_ORDER));
     return group;
   }
 
@@ -368,7 +391,7 @@ export class OrdersService {
     const group = await this.findOneMyGroup(userId, id);
     const active = group.orders.filter((o) => !isTerminal(o.status));
     if (active.length === 0) {
-      throw new BadRequestException('Заказ уже завершён');
+      throw new BadRequestException(err(ERRORS.ORDER_ALREADY_FINISHED));
     }
     if (
       active.some(
@@ -376,9 +399,7 @@ export class OrdersService {
           o.status !== OrderStatus.NEW && o.status !== OrderStatus.CONFIRMED,
       )
     ) {
-      throw new BadRequestException(
-        'Заказ уже собирается — отмену согласуйте с продавцом',
-      );
+      throw new BadRequestException(err(ERRORS.ORDER_ALREADY_ASSEMBLING));
     }
 
     // ⚠️ ОДНА транзакция на всю группу. Вызов applyStatus в цикле дал бы N
@@ -518,7 +539,7 @@ export class OrdersService {
       const details = blocked
         .map(
           (o) =>
-            `#${o.orderNumber} (${o.seller.name}): «${ORDER_STATUS_LABELS[o.status]}»`,
+            `#${o.orderNumber} (${pickTranslation(o.seller.translations, DEFAULT_LOCALE).name}): «${ORDER_STATUS_LABELS[o.status]}»`,
         )
         .join(', ');
       throw new BadRequestException(
@@ -698,7 +719,7 @@ export class OrdersService {
       where: { id },
       include: withGroupOrders(sellerId),
     });
-    if (!group) throw new NotFoundException('Заказ не найден');
+    if (!group) throw new NotFoundException(err(ERRORS.ORDER_NOT_FOUND));
     return group;
   }
 

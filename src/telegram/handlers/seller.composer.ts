@@ -9,6 +9,8 @@ import { ORDER_STATUS_LABELS } from '../../orders/order-status';
 import { OrdersService } from '../../orders/orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TELEGRAM_TAKEN_BY_STAFF } from '../../common/telegram-identity';
+import { DEFAULT_LOCALE } from '../../i18n/locale';
+import { pickTranslation } from '../../i18n/pick';
 import {
   TelegramLinkService,
   type LinkSellerResult,
@@ -206,13 +208,16 @@ export class SellerComposer {
     const seller = user.sellerId
       ? await this.prisma.seller.findUnique({
           where: { id: user.sellerId },
-          select: { name: true },
+          select: { translations: true },
         })
       : null;
 
     return {
       principal: { id: user.id, role: user.role, sellerId: user.sellerId },
-      sellerName: seller?.name ?? null,
+      // Кабинет продавца в боте русскоязычный — локаль не резолвим.
+      sellerName: seller
+        ? pickTranslation(seller.translations, DEFAULT_LOCALE).name
+        : null,
     };
   }
 

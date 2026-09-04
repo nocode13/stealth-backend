@@ -4,11 +4,17 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ListingStatus, MediaStatus, Prisma } from '@prisma/client';
+import { Locale, ListingStatus, MediaStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 import { StorageService } from '../storage/storage.service';
 import { withMediaUrls } from '../catalog/catalog-media.util';
+import { err } from '../i18n/api-error';
+import { ERRORS } from '../i18n/messages';
+import {
+  CatalogItemResponse,
+  toCatalogItemResponse,
+} from '../catalog/catalog.response';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 
 const withListing = {
@@ -16,7 +22,8 @@ const withListing = {
     include: {
       catalogItem: {
         include: {
-          category: true,
+          translations: true,
+          category: { include: { translations: true } },
           // Корзина — экран покупателя, необработанное видео туда не попадает.
           media: {
             where: { status: MediaStatus.READY },
@@ -32,8 +39,14 @@ type CartItemWithListing = Prisma.CartItemGetPayload<{
   include: typeof withListing;
 }>;
 
+export interface CartItemResponse extends Omit<CartItemWithListing, 'listing'> {
+  listing: Omit<CartItemWithListing['listing'], 'catalogItem'> & {
+    catalogItem: CatalogItemResponse;
+  };
+}
+
 export interface CartResponse {
-  items: CartItemWithListing[];
+  items: CartItemResponse[];
   itemCount: number;
   itemsTotal: number;
   deliveryFee: number;
@@ -52,22 +65,26 @@ export class CartService {
     private readonly storage: StorageService,
   ) {}
 
-  async getCart(userId: string): Promise<CartResponse> {
+  async getCart(userId: string, locale: Locale): Promise<CartResponse> {
     const items = await this.prisma.cartItem.findMany({
       where: { userId },
       include: withListing,
       orderBy: { createdAt: 'desc' },
     });
-    return this.toResponse(items);
+    return this.toResponse(items, locale);
   }
 
-  async addItem(userId: string, dto: AddCartItemDto): Promise<CartResponse> {
+  async addItem(
+    userId: string,
+    dto: AddCartItemDto,
+    locale: Locale,
+  ): Promise<CartResponse> {
     const listing = await this.prisma.listing.findUnique({
       where: { id: dto.listingId },
     });
-    if (!listing) throw new NotFoundException('Листинг не найден');
+    if (!listing) throw new NotFoundException(err(ERRORS.LISTING_NOT_FOUND));
     if (listing.status !== ListingStatus.ACTIVE) {
-      throw new BadRequestException('Листинг недоступен');
+      throw new BadRequestException(err(ERRORS.LISTING_UNAVAILABLE));
     }
 
     const existing = await this.prisma.cartItem.findUnique({
@@ -75,7 +92,7 @@ export class CartService {
     });
     const nextQuantity = (existing?.quantity ?? 0) + (dto.quantity ?? 1);
     if (nextQuantity > listing.stock) {
-      throw new BadRequestException('Недостаточно товара на складе');
+      throw new BadRequestException(err(ERRORS.NOT_ENOUGH_STOCK));
     }
 
     await this.prisma.cartItem.upsert({
@@ -83,34 +100,39 @@ export class CartService {
       create: { userId, listingId: dto.listingId, quantity: nextQuantity },
       update: { quantity: nextQuantity },
     });
-    return this.getCart(userId);
+    return this.getCart(userId, locale);
   }
 
   async updateQuantity(
     userId: string,
     itemId: string,
     dto: UpdateCartItemDto,
+    locale: Locale,
   ): Promise<CartResponse> {
     const item = await this.findOwned(userId, itemId);
     if (dto.quantity > item.listing.stock) {
-      throw new BadRequestException('Недостаточно товара на складе');
+      throw new BadRequestException(err(ERRORS.NOT_ENOUGH_STOCK));
     }
     await this.prisma.cartItem.update({
       where: { id: itemId },
       data: { quantity: dto.quantity },
     });
-    return this.getCart(userId);
+    return this.getCart(userId, locale);
   }
 
-  async removeItem(userId: string, itemId: string): Promise<CartResponse> {
+  async removeItem(
+    userId: string,
+    itemId: string,
+    locale: Locale,
+  ): Promise<CartResponse> {
     await this.findOwned(userId, itemId);
     await this.prisma.cartItem.delete({ where: { id: itemId } });
-    return this.getCart(userId);
+    return this.getCart(userId, locale);
   }
 
-  async clearCart(userId: string): Promise<CartResponse> {
+  async clearCart(userId: string, locale: Locale): Promise<CartResponse> {
     await this.prisma.cartItem.deleteMany({ where: { userId } });
-    return this.getCart(userId);
+    return this.getCart(userId, locale);
   }
 
   private async findOwned(
@@ -121,15 +143,16 @@ export class CartService {
       where: { id: itemId },
       include: withListing,
     });
-    if (!item) throw new NotFoundException('Позиция корзины не найдена');
+    if (!item) throw new NotFoundException(err(ERRORS.CART_ITEM_NOT_FOUND));
     if (item.userId !== userId) {
-      throw new ForbiddenException('Чужая корзина');
+      throw new ForbiddenException(err(ERRORS.FOREIGN_CART));
     }
     return item;
   }
 
   private async toResponse(
     items: CartItemWithListing[],
+    locale: Locale,
   ): Promise<CartResponse> {
     const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
     const itemsTotal = items.reduce(
@@ -147,7 +170,10 @@ export class CartService {
         ...i,
         listing: {
           ...i.listing,
-          catalogItem: withMediaUrls(this.storage, i.listing.catalogItem),
+          catalogItem: withMediaUrls(
+            this.storage,
+            toCatalogItemResponse(i.listing.catalogItem, locale),
+          ),
         },
       })),
       itemCount,

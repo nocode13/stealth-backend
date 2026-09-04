@@ -8,8 +8,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Locale } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { ReqLocale } from '../common/decorators/locale.decorator';
 import {
   CancelOrderDto,
   CreateOrderDto,
@@ -39,10 +41,15 @@ export class MobileOrderGroupsController {
       'Товары разных продавцов режутся на отдельные заказы внутри одной группы. ' +
       'Корзина очищается, остатки списываются, доставка платформенная — одна на чекаут.',
   })
-  async create(@CurrentUser('id') userId: string, @Body() dto: CreateOrderDto) {
+  async create(
+    @CurrentUser('id') userId: string,
+    @Body() dto: CreateOrderDto,
+    @ReqLocale() locale: Locale,
+  ) {
     return toOrderGroupResponse(
-      await this.orders.createFromCart(userId, dto),
+      await this.orders.createFromCart(userId, dto, locale),
       this.storage,
+      locale,
     );
   }
 
@@ -51,11 +58,14 @@ export class MobileOrderGroupsController {
   async findMine(
     @CurrentUser('id') userId: string,
     @Query() query: FindOrderGroupsQueryDto,
+    @ReqLocale() locale: Locale,
   ) {
     const page = await this.orders.findMyGroups(userId, query);
     return {
       ...page,
-      items: page.items.map((g) => toOrderGroupResponse(g, this.storage)),
+      items: page.items.map((g) =>
+        toOrderGroupResponse(g, this.storage, locale),
+      ),
     };
   }
 
@@ -64,10 +74,15 @@ export class MobileOrderGroupsController {
     summary:
       'Моя группа целиком: части по продавцам, позиции, история статусов',
   })
-  async findOne(@CurrentUser('id') userId: string, @Param('id') id: string) {
+  async findOne(
+    @CurrentUser('id') userId: string,
+    @Param('id') id: string,
+    @ReqLocale() locale: Locale,
+  ) {
     return toOrderGroupResponse(
       await this.orders.findOneMyGroup(userId, id),
       this.storage,
+      locale,
     );
   }
 
@@ -80,10 +95,12 @@ export class MobileOrderGroupsController {
     @CurrentUser('id') userId: string,
     @Param('id') id: string,
     @Body() dto: CancelOrderDto,
+    @ReqLocale() locale: Locale,
   ) {
     return toOrderGroupResponse(
       await this.orders.cancelMyGroup(userId, id, dto),
       this.storage,
+      locale,
     );
   }
 }

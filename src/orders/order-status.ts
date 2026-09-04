@@ -1,4 +1,4 @@
-import { OrderGroupStatus, OrderStatus } from '@prisma/client';
+import { Locale, OrderGroupStatus, OrderStatus } from '@prisma/client';
 
 /**
  * Единственный источник правды по жизненному циклу заказа.
@@ -53,19 +53,55 @@ export const ORDER_ACTION_LABELS: Record<OrderStatus, string> = {
  *
  * CONFIRMED — «заказ принят», без упоминания продавца: у группы этот статус
  * появляется, только когда подтвердили ВСЕ продавцы (см. deriveGroupStatus).
+ *
+ * Ключуется ЕЩЁ и локалью (User.locale, см. OrderNotifier.groupStatusChanged) —
+ * пуши и Telegram-DM уходят вне HTTP-запроса, заголовка Accept-Language там нет.
  */
-export const CUSTOMER_GROUP_STATUS_MESSAGES: Partial<
-  Record<OrderGroupStatus, string>
+export const CUSTOMER_GROUP_STATUS_MESSAGES: Record<
+  Locale,
+  Partial<Record<OrderGroupStatus, string>>
 > = {
-  [OrderGroupStatus.CONFIRMED]: 'Заказ принят.',
-  [OrderGroupStatus.ASSEMBLING]: 'Ваш заказ собирают.',
-  [OrderGroupStatus.DELIVERING]: 'Заказ передан курьеру и едет к вам.',
-  [OrderGroupStatus.ARRIVED]: '🚗 Курьер на месте! Выходите, пожалуйста.',
-  [OrderGroupStatus.PARTIALLY_DELIVERED]:
-    'Часть заказа доставлена, остальное в пути.',
-  [OrderGroupStatus.DELIVERED]: 'Заказ доставлен. Спасибо за покупку!',
-  [OrderGroupStatus.CANCELLED]: 'Заказ отменён.',
-  // NEW не шлём: покупатель только что оформил заказ сам, он и так это знает.
+  RU: {
+    [OrderGroupStatus.CONFIRMED]: 'Заказ принят.',
+    [OrderGroupStatus.ASSEMBLING]: 'Ваш заказ собирают.',
+    [OrderGroupStatus.DELIVERING]: 'Заказ передан курьеру и едет к вам.',
+    [OrderGroupStatus.ARRIVED]: '🚗 Курьер на месте! Выходите, пожалуйста.',
+    [OrderGroupStatus.PARTIALLY_DELIVERED]:
+      'Часть заказа доставлена, остальное в пути.',
+    [OrderGroupStatus.DELIVERED]: 'Заказ доставлен. Спасибо за покупку!',
+    [OrderGroupStatus.CANCELLED]: 'Заказ отменён.',
+    // NEW не шлём: покупатель только что оформил заказ сам, он и так это знает.
+  },
+  UZ: {
+    [OrderGroupStatus.CONFIRMED]: 'Buyurtma qabul qilindi.',
+    [OrderGroupStatus.ASSEMBLING]: "Buyurtmangiz yig'ilmoqda.",
+    [OrderGroupStatus.DELIVERING]:
+      'Buyurtma kuryerga topshirildi va sizga yetib bormoqda.',
+    [OrderGroupStatus.ARRIVED]: "🚗 Kuryer joyida! Chiqsangiz bo'ladi.",
+    [OrderGroupStatus.PARTIALLY_DELIVERED]:
+      "Buyurtmaning bir qismi yetkazildi, qolgani yo'lda.",
+    [OrderGroupStatus.DELIVERED]:
+      'Buyurtma yetkazildi. Xaridingiz uchun rahmat!',
+    [OrderGroupStatus.CANCELLED]: 'Buyurtma bekor qilindi.',
+  },
+  EN: {
+    [OrderGroupStatus.CONFIRMED]: 'Your order has been confirmed.',
+    [OrderGroupStatus.ASSEMBLING]: 'Your order is being prepared.',
+    [OrderGroupStatus.DELIVERING]: 'Your order is on its way with the courier.',
+    [OrderGroupStatus.ARRIVED]: '🚗 The courier has arrived! Please come out.',
+    [OrderGroupStatus.PARTIALLY_DELIVERED]:
+      'Part of your order has been delivered, the rest is on the way.',
+    [OrderGroupStatus.DELIVERED]:
+      'Order delivered. Thank you for your purchase!',
+    [OrderGroupStatus.CANCELLED]: 'Order cancelled.',
+  },
+};
+
+/** Заголовок пуша/DM: «Заказ №12» на языке покупателя. */
+export const ORDER_TITLE: Record<Locale, string> = {
+  RU: 'Заказ',
+  UZ: 'Buyurtma',
+  EN: 'Order',
 };
 
 export const isTransitionAllowed = (

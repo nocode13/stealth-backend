@@ -4,13 +4,17 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ListingStatus, MediaStatus, Prisma } from '@prisma/client';
+import { Locale, ListingStatus, MediaStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CatalogService } from '../catalog/catalog.service';
 import { withMediaUrls } from '../catalog/catalog-media.util';
 import { CacheService } from '../cache/cache.service';
 import { StorageService } from '../storage/storage.service';
+import { err } from '../i18n/api-error';
+import { DEFAULT_LOCALE } from '../i18n/locale';
+import { ERRORS } from '../i18n/messages';
+import { ListingResponse, toListingResponse } from './listing.response';
 import {
   CreateListingDto,
   FindListingsQueryDto,
@@ -25,17 +29,16 @@ import {
 const withCatalog = {
   catalogItem: {
     include: {
-      category: true,
+      translations: true,
+      category: { include: { translations: true } },
       media: {
         where: { status: MediaStatus.READY },
         orderBy: { sortOrder: 'asc' },
       },
     },
   },
-  seller: { select: { id: true, name: true } },
+  seller: { select: { id: true, translations: true } },
 } satisfies Prisma.ListingInclude;
-
-export type Listing = Prisma.ListingGetPayload<{ include: typeof withCatalog }>;
 
 function buildPriceFilter(
   minPrice?: number,
@@ -57,7 +60,7 @@ export class ListingsService {
   // catalogItem.media хранит ключи S3-объектов — здесь собираем полные URL для ответа.
   // Кэш (findStorefront/findOnePublic) хранит сырые ключи: мэппинг применяется ПОСЛЕ
   // cache.wrap(), как и в CatalogService.
-  private withUrls(listing: Listing): Listing {
+  private withUrls(listing: ListingResponse): ListingResponse {
     return {
       ...listing,
       catalogItem: withMediaUrls(this.storage, listing.catalogItem),
@@ -68,43 +71,60 @@ export class ListingsService {
   // всегда ACTIVE + остаток > 0.
   async findStorefront(
     query: FindListingsQueryDto,
-  ): Promise<CursorPage<Listing>> {
-    const page = await this.cache.wrap('listings', query, async () => {
-      const rows = await this.prisma.listing.findMany({
-        where: {
-          status: ListingStatus.ACTIVE,
-          stock: { gt: 0 },
-          sellerId: query.sellerId,
-          price: buildPriceFilter(query.minPrice, query.maxPrice),
-          catalogItem: {
-            categoryId: query.categoryId,
-            name: query.search
-              ? { contains: query.search, mode: 'insensitive' }
-              : undefined,
+    locale: Locale,
+  ): Promise<CursorPage<ListingResponse>> {
+    // locale ОБЯЗАН быть в params: ключ кэша считается только по ним (см. И3).
+    const page = await this.cache.wrap(
+      'listings',
+      { ...query, locale },
+      async () => {
+        const rows = await this.prisma.listing.findMany({
+          where: {
+            status: ListingStatus.ACTIVE,
+            stock: { gt: 0 },
+            sellerId: query.sellerId,
+            price: buildPriceFilter(query.minPrice, query.maxPrice),
+            catalogItem: {
+              categoryId: query.categoryId,
+              ...(query.search
+                ? {
+                    translations: {
+                      some: {
+                        name: { contains: query.search, mode: 'insensitive' },
+                      },
+                    },
+                  }
+                : {}),
+            },
           },
-        },
-        include: withCatalog,
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        cursor: query.cursor ? { id: query.cursor } : undefined,
-        skip: query.cursor ? 1 : 0,
-        take: query.limit + 1,
-      });
-      return toCursorPage(rows, query.limit);
-    });
+          include: withCatalog,
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          cursor: query.cursor ? { id: query.cursor } : undefined,
+          skip: query.cursor ? 1 : 0,
+          take: query.limit + 1,
+        });
+        const mapped = rows.map((l) => toListingResponse(l, locale));
+        return toCursorPage(mapped, query.limit);
+      },
+    );
     return { ...page, items: page.items.map((l) => this.withUrls(l)) };
   }
 
   // Одно активное предложение для витрины мобилки (карточка товара).
-  async findOnePublic(id: string): Promise<Listing> {
-    const listing = await this.cache.wrap('listing', id, async () => {
-      const found = await this.prisma.listing.findFirst({
-        where: { id, status: ListingStatus.ACTIVE, stock: { gt: 0 } },
-        include: withCatalog,
-      });
-      // Промах в БД не кешируется: исключение из колбэка wrap пробрасывает как есть.
-      if (!found) throw new NotFoundException('Листинг не найден');
-      return found;
-    });
+  async findOnePublic(id: string, locale: Locale): Promise<ListingResponse> {
+    const listing = await this.cache.wrap(
+      'listing',
+      { id, locale },
+      async () => {
+        const found = await this.prisma.listing.findFirst({
+          where: { id, status: ListingStatus.ACTIVE, stock: { gt: 0 } },
+          include: withCatalog,
+        });
+        // Промах в БД не кешируется: исключение из колбэка wrap пробрасывает как есть.
+        if (!found) throw new NotFoundException(err(ERRORS.LISTING_NOT_FOUND));
+        return toListingResponse(found, locale);
+      },
+    );
     return this.withUrls(listing);
   }
 
@@ -113,7 +133,7 @@ export class ListingsService {
   async findForSeller(
     sellerId: string | null,
     query: FindListingsQueryDto,
-  ): Promise<CursorPage<Listing>> {
+  ): Promise<CursorPage<ListingResponse>> {
     const rows = await this.prisma.listing.findMany({
       where: {
         sellerId: sellerId ?? undefined,
@@ -121,9 +141,15 @@ export class ListingsService {
         price: buildPriceFilter(query.minPrice, query.maxPrice),
         catalogItem: {
           categoryId: query.categoryId,
-          name: query.search
-            ? { contains: query.search, mode: 'insensitive' }
-            : undefined,
+          ...(query.search
+            ? {
+                translations: {
+                  some: {
+                    name: { contains: query.search, mode: 'insensitive' },
+                  },
+                },
+              }
+            : {}),
         },
       },
       include: withCatalog,
@@ -132,7 +158,8 @@ export class ListingsService {
       skip: query.cursor ? 1 : 0,
       take: query.limit + 1,
     });
-    const page = toCursorPage(rows, query.limit);
+    const mapped = rows.map((l) => toListingResponse(l, DEFAULT_LOCALE));
+    const page = toCursorPage(mapped, query.limit);
     return { ...page, items: page.items.map((l) => this.withUrls(l)) };
   }
 
@@ -140,19 +167,22 @@ export class ListingsService {
   async findOneForSeller(
     id: string,
     sellerId: string | null,
-  ): Promise<Listing> {
+  ): Promise<ListingResponse> {
     const listing = await this.prisma.listing.findUnique({
       where: { id },
       include: withCatalog,
     });
-    if (!listing) throw new NotFoundException('Листинг не найден');
+    if (!listing) throw new NotFoundException(err(ERRORS.LISTING_NOT_FOUND));
     if (sellerId !== null && listing.sellerId !== sellerId) {
       throw new ForbiddenException('Чужой листинг');
     }
-    return this.withUrls(listing);
+    return this.withUrls(toListingResponse(listing, DEFAULT_LOCALE));
   }
 
-  async create(sellerId: string, dto: CreateListingDto): Promise<Listing> {
+  async create(
+    sellerId: string,
+    dto: CreateListingDto,
+  ): Promise<ListingResponse> {
     // sellerId из тела уже разрешён контроллером (SUPER_ADMIN выбирает продавца),
     // в data он не должен попасть повторно.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -164,7 +194,7 @@ export class ListingsService {
         include: withCatalog,
       });
       await this.cache.bump();
-      return this.withUrls(listing);
+      return this.withUrls(toListingResponse(listing, DEFAULT_LOCALE));
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -182,7 +212,7 @@ export class ListingsService {
     id: string,
     sellerId: string | null,
     dto: UpdateListingDto,
-  ): Promise<Listing> {
+  ): Promise<ListingResponse> {
     await this.findOneForSeller(id, sellerId);
     const listing = await this.prisma.listing.update({
       where: { id },
@@ -190,7 +220,7 @@ export class ListingsService {
       include: withCatalog,
     });
     await this.cache.bump();
-    return this.withUrls(listing);
+    return this.withUrls(toListingResponse(listing, DEFAULT_LOCALE));
   }
 
   async remove(id: string, sellerId: string | null): Promise<void> {
