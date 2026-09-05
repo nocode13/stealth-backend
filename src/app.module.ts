@@ -10,6 +10,7 @@ import { UsersModule } from './users/users.module';
 import { SellersModule } from './sellers/sellers.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { ListingsModule } from './listings/listings.module';
+import { AppVersionModule } from './app-version/app-version.module';
 import { AdminModule } from './admin/admin.module';
 import { MobileModule } from './mobile/mobile.module';
 import { LocalizedExceptionFilter } from './common/filters/localized-exception.filter';
@@ -29,6 +30,7 @@ import { LocalizedExceptionFilter } from './common/filters/localized-exception.f
     SellersModule,
     CatalogModule,
     ListingsModule,
+    AppVersionModule,
     // API-поверхности.
     AdminModule,
     MobileModule,

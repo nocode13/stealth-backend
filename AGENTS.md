@@ -59,6 +59,7 @@ src/
                            # telegram-identity.ts (покупатель и staff — разные учётки)
   auth/                    # стратегии и guard'ы: JWT / session / local; email-auth.service.ts — вход по коду на почту
   users/ sellers/ categories/ catalog/ listings/ cart/ addresses/ settings/
+  app-version/             # версии в сторах для плашки «обновитесь» в мобилке
   orders/                  # OrdersService, order-status.ts, order-notifier.service.ts
   notifications/ metrics/  # in-app лента · агрегаты для дашборда админки
   storage/                 # StorageService (S3) + ImageService (sharp → webp)
@@ -109,6 +110,13 @@ src/
   `admin/settings`: `deliveryFee` (тариф за чекаут) и `freeDeliveryThreshold?` (порог
   бесплатной доставки, `null` = порога нет). `SettingsService.quote()` — единственное
   место в проекте, где считается доставка (см. «Доставка» ниже).
+- **AppVersion** — версии приложения в сторах, ровно две строки (`IOS`/`ANDROID`, PK —
+  сам `platform`), правит `SUPER_ADMIN` из `admin/app-versions`. `latestVersion` даёт мягкую
+  плашку, `minSupportedVersion` — блокирующий экран, `enabled` — рубильник платформы.
+  Как и `PlatformSettings`, это таблица, а не env: после релиза в Play версию поднимают
+  сразу, без редеплоя. Заметки «что нового» лежат тремя nullable-колонками
+  (`releaseNotesRu/Uz/En`), а не таблицей переводов, — одно необязательное поле на две
+  строки не стоит join'а и инварианта «строка есть всегда».
 - **Деньги — `Int` в тийинах** (1 сум = 100 тийин), колонки валюты нет.
 - **RefreshToken** — sha256-хэши активных refresh-токенов.
 - **TelegramAuthSession** — вход по nonce; токенов в ней нет (при консьюме выпускается свежая
@@ -223,6 +231,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | `admin/sellers/:sellerId/staff` | SUPER_ADMIN, **владелец** | `GET /`, `POST /`, `PATCH /:staffId`, `DELETE /:staffId`, `POST /:staffId/telegram/invite`, `POST /:staffId/telegram/unlink` |
 | `admin/metrics` | SUPER_ADMIN | `GET users`, `GET orders`, `GET catalog`, `GET overview` |
 | `admin/settings` | SUPER_ADMIN | `GET /`, `PATCH /` — тариф доставки/порог бесплатной доставки |
+| `admin/app-versions` | SUPER_ADMIN | `GET /`, `PATCH /:platform` — версии приложения в сторах |
 
 `SELLER` жёстко скоупится своим `sellerId`; его query-параметр `sellerId` игнорируется.
 
@@ -244,6 +253,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | `mobile/order-groups` | JwtAuthGuard | `POST /`, `GET /`, `GET /:id`, `POST /:id/cancel` |
 | `mobile/notifications` | JwtAuthGuard | `GET /`, `POST read` |
 | `mobile/settings` | **публичный** | `GET /` — `{ deliveryFee, freeDeliveryThreshold }`, как остальная витрина |
+| `mobile/app-version` | **публичный** | `GET /?platform&version` — вердикт по обновлению из стора |
 
 Плюс `GET /health` и вебхуки `POST /telegram/webhook` (основной бот) и
 `POST /telegram/webhook/seller` (бот продавца) — без гварда, каждый сверяет свой секрет в
@@ -590,7 +600,10 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 недостижимы и истекают сами, без SCAN/DEL.
 
 - Кэшируется **только публичная витрина** (`listings`, `listing`, `categories`, `catalog`,
-  `seller`, `settings`); админские списки — никогда. Пустой `REDIS_URL` → кэш выключен.
+  `seller`, `settings`, `app-version`); админские списки — никогда. Пустой `REDIS_URL` →
+  кэш выключен. ⚠️ `app-version` — единственное исключение из правила «локаль в `params`»:
+  в кэш кладётся сырая строка со всеми тремя языками заметок, локаль резолвится уже
+  после, в `AppVersionService.check()`.
 - Fail-open: любая ошибка Redis = промах. `enableOfflineQueue: false`, `family: 0`
   (IPv6-DNS Railway), лог ошибок троттлится до 1/мин.
 - Исключения из `fn` не кэшируются. Значения ходят через JSON, поэтому `Date` возвращается
