@@ -59,6 +59,7 @@ src/
                            # telegram-identity.ts (покупатель и staff — разные учётки)
   auth/                    # стратегии и guard'ы: JWT / session / local; email-auth.service.ts — вход по коду на почту
   users/ sellers/ categories/ catalog/ listings/ cart/ addresses/ settings/
+  app-version/             # версии в сторах для плашки «обновитесь» в мобилке
   orders/                  # OrdersService, order-status.ts, order-notifier.service.ts
   notifications/ metrics/  # in-app лента · агрегаты для дашборда админки
   storage/                 # StorageService (S3) + ImageService (sharp → webp)
@@ -96,9 +97,11 @@ src/
   `sellerId` заполнен → продавец предложил свою, `PENDING` до апрува (`PATCH …/:id/status`).
   После апрува доступна для выбора/листинга **только этому продавцу** (наряду с master), но
   на витрине мобилки видны **все** `APPROVED` — ограничение касается создания, не показа.
-  `Category`: `nameRu` (обязательное, фолбэк) + `nameUz?/nameEn?/nameKaa?`.
-  `CatalogItem`: `categoryId?` (nullable, `Restrict`), `unit` (дефолт «шт»), галерея
-  `images: CatalogItemImage[]`. Общий enum `ReviewStatus`. `freeDelivery: Boolean` —
+  `Category`/`CatalogItem`/`Seller` мультиязычны — название/описание/единица живут не
+  колонками на самой сущности, а в отдельных таблицах переводов (`CategoryTranslation`,
+  `CatalogItemTranslation`, `SellerTranslation`), см. «Мультиязычность» ниже.
+  `CatalogItem`: `categoryId?` (nullable, `Restrict`), галерея `media: CatalogItemMedia[]`.
+  Общий enum `ReviewStatus`. `freeDelivery: Boolean` —
   вайтлист бесплатной доставки, ставит только `SUPER_ADMIN` (см. «Доставка» ниже).
 - **Listing** — предложение продавца поверх позиции: `price`, `stock`, `status`
   (`DRAFT|ACTIVE|ARCHIVED`), `@@unique([sellerId, catalogItemId])`. При создании
@@ -107,6 +110,13 @@ src/
   `admin/settings`: `deliveryFee` (тариф за чекаут) и `freeDeliveryThreshold?` (порог
   бесплатной доставки, `null` = порога нет). `SettingsService.quote()` — единственное
   место в проекте, где считается доставка (см. «Доставка» ниже).
+- **AppVersion** — версии приложения в сторах, ровно две строки (`IOS`/`ANDROID`, PK —
+  сам `platform`), правит `SUPER_ADMIN` из `admin/app-versions`. `latestVersion` даёт мягкую
+  плашку, `minSupportedVersion` — блокирующий экран, `enabled` — рубильник платформы.
+  Как и `PlatformSettings`, это таблица, а не env: после релиза в Play версию поднимают
+  сразу, без редеплоя. Заметки «что нового» лежат тремя nullable-колонками
+  (`releaseNotesRu/Uz/En`), а не таблицей переводов, — одно необязательное поле на две
+  строки не стоит join'а и инварианта «строка есть всегда».
 - **Деньги — `Int` в тийинах** (1 сум = 100 тийин), колонки валюты нет.
 - **RefreshToken** — sha256-хэши активных refresh-токенов.
 - **TelegramAuthSession** — вход по nonce; токенов в ней нет (при консьюме выпускается свежая
@@ -144,6 +154,68 @@ src/
 (`changeGroupStatus`, `cancelMyGroup`) плодил бы запись на каждый задетый заказ вместо одной
 на фактический переход.
 
+## Мультиязычность
+
+Локали контента — `RU`/`UZ`/`EN` (enum `Locale`), `RU` — дефолт и фолбэк. `kaa` в продукте
+не участвует.
+
+**Хранение — таблица переводов на сущность**, не колонки `nameRu/nameUz/...`:
+`CategoryTranslation`/`CatalogItemTranslation`/`SellerTranslation`, `@@unique([<entity>Id,
+locale])`. Инвариант: у каждой сущности строка перевода есть **для каждой локали всегда** —
+сервис при создании/обновлении дописывает недостающие значением `RU` и ставит `auto: true`
+(«перевод не задан, это копия русского» — админка рисует такое поле пустым). Это же снимает
+фолбэк-логику с пути чтения и делает возможной сортировку/курсорную пагинацию по имени:
+Prisma не умеет `orderBy` по to-many-связи, поэтому список на нужном языке (`findStorefront`
+у категорий/каталога) строится **запросом от таблицы переводов**, а не от самой сущности.
+
+**Локаль приходит только заголовком `Accept-Language`** (`src/i18n/locale.ts:
+parseAcceptLanguage`, сопоставляет BCP-47 тег по первичному сабтегу, всё незнакомое → `RU`).
+Query-параметра `lang` нет — глобальный `ValidationPipe({ forbidNonWhitelisted })` отверг бы
+его 400-й. `@ReqLocale()` (`src/common/decorators/locale.decorator.ts`) ставится **только**
+в контроллерах `src/mobile/`; `src/admin/` всегда передаёт `DEFAULT_LOCALE` явно — иначе
+админ с английским браузером увидел бы английские названия. Ответ мобилке — плоский резолв
+(`pickTranslation`, `src/i18n/pick.ts`): одно поле `name`/`description`/`unit`, ни одной
+локали в контракте; ответ админке — резолв на `DEFAULT_LOCALE` плюс массив `translations`
+для формы редактирования (мапперы `to<Entity>Response`/`toAdmin<Entity>Response`, живут
+рядом с доменом — `category.response.ts`, `catalog.response.ts`, `seller.response.ts`,
+по прецеденту `orders/order.response.ts`).
+
+⚠️ **Локаль обязана входить в ключ Redis-кэша.** `CacheService.wrap(ns, params, fn)` ключует
+только по `params` — без локали в `params` три языка схлопнутся в один кэш-ключ. Правило:
+везде, где есть `cache.wrap` на локализуемых данных, в `params` добавляется `locale`
+(`{ ...query, locale }` у списков, `{ id, locale }` у одиночных сущностей).
+
+**`OrderItem` — снапшот сразу по всем локалям**, JSON вместо строки
+(`catalogItemName`/`unit: Json`, `src/i18n/localized-text.ts`: `toLocalizedText`/`pickText`).
+Причина: снапшот заказа обязан пережить смену языка пользователем, поэтому на момент
+оформления в БД кладётся объект `{ RU, UZ, EN }` сразу, а не строка на одном языке.
+
+**`User.locale`** — язык пушей и Telegram-DM: они уходят вне HTTP-запроса, заголовка
+`Accept-Language` там нет. Проставляется `POST /mobile/auth/locale` (без тела — локаль берёт
+из того же заголовка, что и остальные запросы, вызывается мобилкой после логина и на смену
+языка интерфейса); `null` = ещё не сообщён, используется `DEFAULT_LOCALE`.
+`CUSTOMER_GROUP_STATUS_MESSAGES`/`ORDER_TITLE` (`src/orders/order-status.ts`) ключуются
+локалью — `OrderNotifier.groupStatusChanged` резолвит её из `User.locale` (см.
+«Уведомления»).
+
+⚠️ **Колонка nullable и без дефолта, а Prisma компилирует `not` в голое `locale <> $1`** —
+NULL под такой предикат не попадает. Поэтому любой фильтр «язык отличается» обязан включать
+`{ locale: null }` явно (`OR: [{ locale: null }, { locale: { not: locale } }]`, см.
+`UsersService.setLocale`): без этого первая — единственно важная — запись языка матчила 0 строк,
+`updateMany` при этом не бросает, эндпоинт отвечал 204, и пуши с Telegram-DM навсегда
+оставались на `DEFAULT_LOCALE`. Тот же вопрос задавать себе на каждой nullable-колонке.
+
+**Ошибки API.** `src/i18n/messages.ts` (`ERRORS`/`ERROR_MESSAGES`/`translateError`) + `err()`
+(`src/i18n/api-error.ts`) — сервис бросает `throw new BadRequestException(err(ERRORS.KEY,
+params?))` вместо русской строки, `LocalizedExceptionFilter`
+(`src/common/filters/localized-exception.filter.ts`, **первый и единственный глобальный
+фильтр в проекте**, `APP_FILTER` в `app.module.ts`) переводит `messageKey` по
+`Accept-Language` в момент ответа. Правило границы: переводятся только ошибки, которые видит
+**мобилка** — админские (`'Чужая категория продавца'`, `'Недостаточно прав'` и т.п.) остаются
+обычными русскими строками, заводить перевод для всех ~90 мест `throw new *Exception` в
+проекте не нужно. Тело нелокализованных ошибок (обычная строка, массив от `ValidationPipe`)
+фильтр пропускает как есть.
+
 ## API
 
 Глобального префикса нет. **Админка** — везде `AuthenticatedGuard + RolesGuard`, кроме `auth`:
@@ -159,6 +231,7 @@ src/
 | `admin/sellers/:sellerId/staff` | SUPER_ADMIN, **владелец** | `GET /`, `POST /`, `PATCH /:staffId`, `DELETE /:staffId`, `POST /:staffId/telegram/invite`, `POST /:staffId/telegram/unlink` |
 | `admin/metrics` | SUPER_ADMIN | `GET users`, `GET orders`, `GET catalog`, `GET overview` |
 | `admin/settings` | SUPER_ADMIN | `GET /`, `PATCH /` — тариф доставки/порог бесплатной доставки |
+| `admin/app-versions` | SUPER_ADMIN | `GET /`, `PATCH /:platform` — версии приложения в сторах |
 
 `SELLER` жёстко скоупится своим `sellerId`; его query-параметр `sellerId` игнорируется.
 
@@ -180,6 +253,7 @@ src/
 | `mobile/order-groups` | JwtAuthGuard | `POST /`, `GET /`, `GET /:id`, `POST /:id/cancel` |
 | `mobile/notifications` | JwtAuthGuard | `GET /`, `POST read` |
 | `mobile/settings` | **публичный** | `GET /` — `{ deliveryFee, freeDeliveryThreshold }`, как остальная витрина |
+| `mobile/app-version` | **публичный** | `GET /?platform&version` — вердикт по обновлению из стора |
 
 Плюс `GET /health` и вебхуки `POST /telegram/webhook` (основной бот) и
 `POST /telegram/webhook/seller` (бот продавца) — без гварда, каждый сверяет свой секрет в
@@ -263,9 +337,12 @@ Payme/Click — добавлением значений в енам; `providerTx
 что единица заказа в мобилке: плоских `/mobile/orders` нет, и каскад `changeGroupStatus` по трём
 продавцам обязан дать **одно** сообщение «заказ едет», а не три с разными `orderNumber`.
 `OrderNotifier.groupStatusChanged(group, { feedOnly? })` шлёт лента+push+Telegram, тексты —
-`CUSTOMER_GROUP_STATUS_MESSAGES` (`src/orders/order-status.ts`, ключуется `OrderGroupStatus`,
-поэтому есть и `PARTIALLY_DELIVERED`; `NEW` не шлётся — покупатель сам только что оформил).
-Заголовок и DM — `Заказ №<groupNumber>` (`№` = группа, `#` = `Order`, как в карточках бота).
+`CUSTOMER_GROUP_STATUS_MESSAGES` (`src/orders/order-status.ts`, ключуется **сначала
+`Locale`, потом** `OrderGroupStatus`, поэтому есть и `PARTIALLY_DELIVERED`; `NEW` не шлётся —
+покупатель сам только что оформил). Язык резолвится из `User.locale` (пуши/DM уходят вне
+HTTP-запроса, заголовка `Accept-Language` там нет — см. «Мультиязычность»), `null` →
+`DEFAULT_LOCALE`. Заголовок и DM — `${ORDER_TITLE[locale]} №<groupNumber>` (`№` = группа,
+`#` = `Order`, как в карточках бота).
 
 ⚠️ Условие отправки — **реальная смена выведенного статуса группы**, тот же инвариант, что у
 `OrderGroupStatusHistory`. Проверку делает `OrdersService`, а не нотифаер: сравнивается
@@ -286,11 +363,15 @@ Payload ленты и `data` пуша: `{ groupId, groupNumber, status }` под
 незнакомый `type`, а не падать на нём. `orderId` там указывал на сущность, которую мобилка
 запросить не может: эндпоинта по одному `Order` в мобильном API нет.
 
-⚠️ **Push и Telegram-DM покупателю взаимоисключающие.** `groupStatusChanged` сначала пробует
-`PushService.sendToUser`, и только если тот вернул `false` (нет живых токенов либо Expo
-недоступен) — шлёт сообщение в бот. Иначе юзер с приложением и ботом получал бы два
-уведомления об одном событии. Telegram-канал никуда не девается: в Mini App и вебе пушей нет
-вовсе, а сообщение бота там приходит в чат *под* приложением и невидимо, пока юзер в нём.
+**Push и Telegram-DM покупателю шлются оба, независимо.** `groupStatusChanged` вызывает
+`PushService.sendToUser` и `TelegramNotifyService.sendToCustomer` каждый в своём try/catch —
+падение одного канала не блокирует другой. Раньше Telegram-DM был фолбэком (слался только если
+`sendToUser` вернул `false`), но `sendToUser` возвращает `true` уже по факту принятия
+Expo-тикета, а не подтверждённой доставки: реальный вердикт FCM/APNs (например
+`DeviceNotRegistered` у протухшего токена) приходит позже, через `checkReceipts`, вне этого
+вызова — фолбэк на этом флаге молча оставлял покупателя без единого уведомления. Telegram-канал
+и так нужен независимо от пуша: в Mini App и вебе пушей нет вовсе, а сообщение бота там
+приходит в чат *под* приложением и невидимо, пока юзер в нём.
 
 **`src/push/`** — отдельный домен по образцу `TelegramNotifyModule`: только исходящие, без
 импортов, чтобы `OrdersModule` не получил цикл. `PushTokensService` — реестр (`register` —
@@ -519,20 +600,29 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 недостижимы и истекают сами, без SCAN/DEL.
 
 - Кэшируется **только публичная витрина** (`listings`, `listing`, `categories`, `catalog`,
-  `seller`, `settings`); админские списки — никогда. Пустой `REDIS_URL` → кэш выключен.
+  `seller`, `settings`, `app-version`); админские списки — никогда. Пустой `REDIS_URL` →
+  кэш выключен. ⚠️ `app-version` — единственное исключение из правила «локаль в `params`»:
+  в кэш кладётся сырая строка со всеми тремя языками заметок, локаль резолвится уже
+  после, в `AppVersionService.check()`.
 - Fail-open: любая ошибка Redis = промах. `enableOfflineQueue: false`, `family: 0`
   (IPv6-DNS Railway), лог ошибок троттлится до 1/мин.
 - Исключения из `fn` не кэшируются. Значения ходят через JSON, поэтому `Date` возвращается
   строкой — для HTTP-ответа нормально, как Prisma-сущность использовать нельзя.
 - `bump()` зовут все мутации каталога/категорий/листингов/продавца и заказы — ⚠️ **после
   коммита**: изнутри транзакции кэш успел бы перезаполниться доккоммитными данными.
+- ⚠️ **Локаль обязана входить в `params`** везде, где кэшируются локализуемые данные
+  (категории, каталог, листинги, продавец) — иначе три языка (`RU`/`UZ`/`EN`) схлопнутся в
+  один ключ и будут отдавать друг другу чужой текст, см. «Мультиязычность» выше.
 
 **Курсорная пагинация** (`src/common/pagination.ts`, `CursorPaginationDto`): `cursor?` (id
 последнего элемента) + `limit` (1..100, дефолт 20) → `{ items, nextCursor }`. Контракт: сервис
 обязан запрашивать `take: limit + 1` (лишняя строка — признак «есть ещё», `toCursorPage` её
 срезает) и держать `orderBy`, **заканчивающийся на `id`** — только это делает курсор
 детерминированным. Используют listings, catalog, categories, orders, sellers; лента
-уведомлений идёт по своему `seq` и этот контракт не использует.
+уведомлений идёт по своему `seq` и этот контракт не использует. ⚠️ Витрина категорий/каталога
+на публичных эндпоинтах (`findStorefront`/`findAll`) строится запросом **от таблицы
+переводов**, а не от самой сущности (Prisma не умеет `orderBy` по to-many) — курсор при этом
+остаётся id сущности, не id строки перевода, контракт `CursorPage` не меняется.
 
 ## Фото
 
@@ -608,9 +698,10 @@ Buckets приватные и публичных URL не дают, а ссыл�
 - после мутации каталога витрина сразу отдаёт свежие данные (значит `bump()` не забыт);
 - уведомления покупателя считаются по группе: чекаут у двух продавцов, переведённый в
   `CONFIRMED` целиком, даёт **одну** строку в `/mobile/notifications` (`ORDER_GROUP_STATUS_CHANGED`,
-  `{ groupId, groupNumber, status }`) и **один** пуш; смена статуса одного заказа, не сдвинувшая
-  `deriveGroupStatus`, не даёт ничего; повторный `PATCH …/group-status` тем же статусом — тоже;
-  самоотмена пишет строку в ленту, но не шлёт покупателю ни пуша, ни сообщения в бот;
+  `{ groupId, groupNumber, status }`), **один** пуш и **одно** сообщение в Telegram (оба канала
+  шлются независимо — не только пуш ИЛИ только Telegram); смена статуса одного заказа, не
+  сдвинувшая `deriveGroupStatus`, не даёт ничего; повторный `PATCH …/group-status` тем же
+  статусом — тоже; самоотмена пишет строку в ленту, но не шлёт покупателю ни пуша, ни сообщения в бот;
 - вход по почте: верный код логинит, повтор того же `email/verify` → 401, 5 неверных кодов
   подряд гасят сессию, 6 `email/session` на один адрес за 15 мин → 429; легаси-юзеру с
   `emailVerifiedAt = NULL` логин попадает в ту же учётку и проставляет `emailVerifiedAt`;
@@ -629,3 +720,17 @@ Buckets приватные и публичных URL не дают, а ссыл�
   владельцу; заблокировавший бота сотрудник не мешает доставке остальным; сотрудник без
   привязки просто пропускается; рядовой сотрудник получает 403 на `…/staff`, владелец чужого
   продавца — тоже; владельца удалить нельзя (400).
+- мультиязычность: `GET /mobile/categories`/`catalog`/`listings` с `Accept-Language: ru|uz|en`
+  отдают плоское `name`/`description`/`unit` на нужном языке, без `nameRu`; без заголовка — RU;
+  запрос `ru` → `uz` → `ru` не путает языки (в Redis `KEYS 'sf:*'` три разных ключа на три
+  локали); курсорная пагинация по имени работает без дублей/пропусков на каждом языке;
+  создание категории только с RU-названием → в ответе админки `translations` содержат
+  `auto: true` для UZ/EN, а мобилка с `Accept-Language: uz` показывает русское имя (фолбэк);
+  ошибка (`add to cart` сверх остатка, 404 и т.п.) переведена по `Accept-Language`, ошибки
+  админских путей остаются русскими; заказ, оформленный на одном языке, читается на другом —
+  `catalogItemName`/`unit` в ответе меняются, а `order_items` в БД хранит JSON по всем трём
+  сразу; `POST /mobile/auth/locale` проставляет `User.locale`, и следующий пуш/Telegram-DM
+  по смене статуса заказа уходит на этом языке. ⚠️ Проверять именно **значение в БД**
+  (`select locale from users where id = …`), а не 204 от эндпоинта: `updateMany` при нулевом
+  совпадении не ошибка, и сломанный фильтр выглядит как успешный запрос — юзеру с ещё не
+  проставленным (`NULL`) языком первый же вызов обязан записать не-NULL.

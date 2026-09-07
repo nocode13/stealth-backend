@@ -28,7 +28,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
 import { CatalogService } from '../catalog/catalog.service';
-import type { CatalogItem } from '../catalog/catalog.service';
+import type { AdminCatalogItemResponse } from '../catalog/catalog.response';
 import { StorageService } from '../storage/storage.service';
 import { ImageService } from '../storage/image.service';
 import { MediaProcessingService } from '../storage/media-processing.service';
@@ -147,7 +147,7 @@ export class AdminCatalogController {
   ) {
     const key = this.mediaProcessing.sourceKey(file.originalname);
     await this.storage.upload(key, file.buffer, file.mimetype);
-    let created: { item: CatalogItem; mediaId: string };
+    let created: { item: AdminCatalogItemResponse; mediaId: string };
     try {
       created = await this.catalog.addMedia(
         id,

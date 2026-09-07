@@ -4,17 +4,28 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, Role, Seller, SellerStatus } from '@prisma/client';
+import { Locale, Prisma, Role, SellerStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CacheService } from '../cache/cache.service';
+import { err } from '../i18n/api-error';
+import { ERRORS } from '../i18n/messages';
+import { normalizeSellerTranslations } from '../i18n/translations.util';
+import {
+  AdminSellerResponse,
+  SellerResponse,
+  toAdminSellerResponse,
+  toSellerResponse,
+} from './seller.response';
 import {
   CreateSellerDto,
   FindSellersQueryDto,
   UpdateSellerDto,
 } from './dto/seller.dto';
+
+const withTranslations = { translations: true } satisfies Prisma.SellerInclude;
 
 @Injectable()
 export class SellersService {
@@ -27,44 +38,60 @@ export class SellersService {
   ) {}
 
   // bannerUrl в БД хранится как ключ S3-объекта — здесь собираем полный URL для ответа.
-  private withUrl(seller: Seller): Seller {
+  private withUrl<T extends { bannerUrl: string | null }>(seller: T): T {
     return {
       ...seller,
       bannerUrl: this.storage.getUrlOrNull(seller.bannerUrl),
     };
   }
 
-  async findAll(query: FindSellersQueryDto): Promise<CursorPage<Seller>> {
+  async findAll(
+    query: FindSellersQueryDto,
+  ): Promise<CursorPage<AdminSellerResponse>> {
     const rows = await this.prisma.seller.findMany({
       where: {
         status: query.status,
-        name: query.search
-          ? { contains: query.search, mode: 'insensitive' }
-          : undefined,
+        ...(query.search
+          ? {
+              translations: {
+                some: { name: { contains: query.search, mode: 'insensitive' } },
+              },
+            }
+          : {}),
       },
+      include: withTranslations,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       cursor: query.cursor ? { id: query.cursor } : undefined,
       skip: query.cursor ? 1 : 0,
       take: query.limit + 1,
     });
     const page = toCursorPage(rows, query.limit);
-    return { ...page, items: page.items.map((s) => this.withUrl(s)) };
+    return {
+      ...page,
+      items: page.items.map((s) => this.withUrl(toAdminSellerResponse(s))),
+    };
   }
 
-  async findOne(id: string): Promise<Seller> {
-    const seller = await this.prisma.seller.findUnique({ where: { id } });
-    if (!seller) throw new NotFoundException('Продавец не найден');
-    return this.withUrl(seller);
+  async findOne(id: string): Promise<AdminSellerResponse> {
+    const seller = await this.prisma.seller.findUnique({
+      where: { id },
+      include: withTranslations,
+    });
+    if (!seller) throw new NotFoundException(err(ERRORS.SELLER_NOT_FOUND));
+    return this.withUrl(toAdminSellerResponse(seller));
   }
 
   // Витрина мобилки: только ACTIVE продавцы (SUSPENDED/PENDING не показываем).
-  async findOnePublic(id: string): Promise<Seller> {
-    const seller = await this.cache.wrap('seller', id, async () => {
+  async findOnePublic(id: string, locale: Locale): Promise<SellerResponse> {
+    // locale ОБЯЗАН быть в params: ключ кэша считается только по ним (см. И3).
+    const seller = await this.cache.wrap('seller', { id, locale }, async () => {
       const found = await this.prisma.seller.findUnique({
         where: { id, status: SellerStatus.ACTIVE },
+        include: withTranslations,
       });
-      if (!found) throw new NotFoundException('Продавец не найден');
-      return found;
+      // Промах в БД не кешируется: исключение из колбэка wrap пробрасывает как есть.
+      if (!found) throw new NotFoundException(err(ERRORS.SELLER_NOT_FOUND));
+      return toSellerResponse(found, locale);
     });
     return this.withUrl(seller);
   }
@@ -74,7 +101,8 @@ export class SellersService {
   // проставляется вторым шагом: Seller.ownerUserId для него ещё не существует,
   // пока сам продавец не создан, а весь остальной код (groupStaffScope в заказах,
   // видимость категорий/каталога) скоупит SELLER именно по User.sellerId.
-  async create(dto: CreateSellerDto): Promise<Seller> {
+  async create(dto: CreateSellerDto): Promise<AdminSellerResponse> {
+    const rows = normalizeSellerTranslations(dto.translations);
     try {
       const created = await this.prisma.$transaction(async (tx) => {
         const passwordHash = await bcrypt.hash(dto.ownerPassword, 10);
@@ -88,10 +116,10 @@ export class SellersService {
         });
         const seller = await tx.seller.create({
           data: {
-            name: dto.name,
-            description: dto.description,
             ownerUserId: owner.id,
+            translations: { create: rows },
           },
+          include: withTranslations,
         });
         await tx.user.update({
           where: { id: owner.id },
@@ -100,7 +128,7 @@ export class SellersService {
         return seller;
       });
       await this.cache.bump();
-      return this.withUrl(created);
+      return this.withUrl(toAdminSellerResponse(created));
     } catch (e) {
       if (
         e instanceof Prisma.PrismaClientKnownRequestError &&
@@ -118,19 +146,35 @@ export class SellersService {
     }
   }
 
-  async update(id: string, dto: UpdateSellerDto): Promise<Seller> {
-    const updated = await this.prisma.seller.update({
-      where: { id },
-      data: dto,
-    });
+  async update(id: string, dto: UpdateSellerDto): Promise<AdminSellerResponse> {
+    // dto.translations не пришёл (частичный PATCH) — переводы не трогаем вообще.
+    const rows = dto.translations
+      ? normalizeSellerTranslations(dto.translations)
+      : null;
+    await this.prisma.$transaction([
+      this.prisma.seller.update({
+        where: { id },
+        data: { status: dto.status },
+      }),
+      ...(rows ?? []).map((r) =>
+        this.prisma.sellerTranslation.upsert({
+          where: { sellerId_locale: { sellerId: id, locale: r.locale } },
+          create: { sellerId: id, ...r },
+          update: { name: r.name, description: r.description, auto: r.auto },
+        }),
+      ),
+    ]);
     await this.cache.bump();
-    return this.withUrl(updated);
+    return this.findOne(id);
   }
 
-  async updateBanner(id: string, bannerKey: string): Promise<Seller> {
+  async updateBanner(
+    id: string,
+    bannerKey: string,
+  ): Promise<AdminSellerResponse> {
     const seller = await this.prisma.seller.findUnique({ where: { id } });
     if (!seller) {
-      throw new NotFoundException('Продавец не найден');
+      throw new NotFoundException(err(ERRORS.SELLER_NOT_FOUND));
     }
 
     const oldBannerKey = seller.bannerUrl;
@@ -140,11 +184,11 @@ export class SellersService {
       });
     }
 
-    const updated = await this.prisma.seller.update({
+    await this.prisma.seller.update({
       where: { id },
       data: { bannerUrl: bannerKey },
     });
     await this.cache.bump();
-    return this.withUrl(updated);
+    return this.findOne(id);
   }
 }

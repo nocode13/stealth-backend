@@ -5,6 +5,8 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { Role } from '@prisma/client';
 import { AuthPrincipal } from '../../common/decorators/current-user.decorator';
 import { PrismaService } from '../../prisma/prisma.service';
+import { err } from '../../i18n/api-error';
+import { ERRORS } from '../../i18n/messages';
 
 interface JwtPayload {
   sub: string;
@@ -39,7 +41,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       select: { deletedAt: true },
     });
     if (!user || user.deletedAt) {
-      throw new UnauthorizedException('Аккаунт удалён');
+      throw new UnauthorizedException(err(ERRORS.ACCOUNT_DELETED));
     }
     return {
       id: payload.sub,

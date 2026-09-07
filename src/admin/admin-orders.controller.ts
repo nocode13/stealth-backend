@@ -14,6 +14,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { DEFAULT_LOCALE } from '../i18n/locale';
 import {
   ChangeOrderStatusDto,
   FindOrderGroupsQueryDto,
@@ -83,6 +84,7 @@ export class AdminOrdersController {
     return toOrderGroupResponse(
       await this.orders.changeStatus(user, orderId, dto),
       this.storage,
+      DEFAULT_LOCALE,
     );
   }
 
@@ -104,6 +106,7 @@ export class AdminOrdersController {
     return toOrderGroupResponse(
       await this.orders.changeGroupStatus(user, id, dto),
       this.storage,
+      DEFAULT_LOCALE,
     );
   }
 
@@ -118,6 +121,7 @@ export class AdminOrdersController {
     return toOrderGroupResponse(
       await this.orders.updateCourier(user, orderId, dto),
       this.storage,
+      DEFAULT_LOCALE,
     );
   }
 
@@ -126,7 +130,7 @@ export class AdminOrdersController {
     group: OrderGroupWithOrders,
   ): OrderGroupResponse {
     return user.role === Role.SUPER_ADMIN
-      ? toOrderGroupResponse(group, this.storage)
-      : toSellerOrderGroupResponse(group, this.storage);
+      ? toOrderGroupResponse(group, this.storage, DEFAULT_LOCALE)
+      : toSellerOrderGroupResponse(group, this.storage, DEFAULT_LOCALE);
   }
 }
