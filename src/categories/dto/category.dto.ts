@@ -1,31 +1,49 @@
-import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
-import { ReviewStatus } from '@prisma/client';
-import { IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Locale, ReviewStatus } from '@prisma/client';
+import { Type } from 'class-transformer';
+import {
+  ArrayNotEmpty,
+  IsArray,
+  IsEnum,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
 import { CursorPaginationDto } from '../../common/dto/pagination.dto';
 
-export class CreateCategoryDto {
-  @ApiProperty({ example: 'Розы' })
-  @IsString()
-  @MinLength(2)
-  nameRu: string;
+export class CategoryTranslationDto {
+  @ApiProperty({ enum: Locale, example: Locale.RU })
+  @IsEnum(Locale)
+  locale: Locale;
 
-  @ApiPropertyOptional({ example: 'Atirgullar' })
+  @ApiPropertyOptional({
+    example: 'Розы',
+    description: 'Пусто = не переведено, подставится RU',
+  })
   @IsOptional()
   @IsString()
-  nameUz?: string;
-
-  @ApiPropertyOptional({ example: 'Roses' })
-  @IsOptional()
-  @IsString()
-  nameEn?: string;
-
-  @ApiPropertyOptional({ example: 'Atirgúller' })
-  @IsOptional()
-  @IsString()
-  nameKaa?: string;
+  name?: string;
 }
 
-export class UpdateCategoryDto extends PartialType(CreateCategoryDto) {
+export class CreateCategoryDto {
+  @ApiProperty({ type: [CategoryTranslationDto], description: 'RU обязателен' })
+  @IsArray()
+  @ArrayNotEmpty()
+  @ValidateNested({ each: true })
+  @Type(() => CategoryTranslationDto)
+  translations: CategoryTranslationDto[];
+}
+
+// НЕ PartialType(CreateCategoryDto) — @ValidateNested на вложенном массиве ведёт
+// себя неочевидно поверх PartialType, поэтому DTO объявлен заново.
+export class UpdateCategoryDto {
+  @ApiPropertyOptional({ type: [CategoryTranslationDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CategoryTranslationDto)
+  translations?: CategoryTranslationDto[];
+
   @ApiPropertyOptional({ enum: ReviewStatus })
   @IsOptional()
   @IsEnum(ReviewStatus)

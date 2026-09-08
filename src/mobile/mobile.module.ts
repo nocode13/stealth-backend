@@ -9,6 +9,7 @@ import { CartModule } from '../cart/cart.module';
 import { OrdersModule } from '../orders/orders.module';
 import { SellersModule } from '../sellers/sellers.module';
 import { SettingsModule } from '../settings/settings.module';
+import { AppVersionModule } from '../app-version/app-version.module';
 import { AddressesModule } from '../addresses/addresses.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PushModule } from '../push/push.module';
@@ -23,6 +24,7 @@ import { MobileSellersController } from './mobile-sellers.controller';
 import { MobileAddressesController } from './mobile-addresses.controller';
 import { MobileNotificationsController } from './mobile-notifications.controller';
 import { MobileSettingsController } from './mobile-settings.controller';
+import { MobileAppVersionController } from './mobile-app-version.controller';
 
 // API-поверхность мобилки. JWT-guard'ы + Swagger-теги, логика в доменных модулях.
 @Module({
@@ -37,6 +39,7 @@ import { MobileSettingsController } from './mobile-settings.controller';
     OrdersModule,
     SellersModule,
     SettingsModule,
+    AppVersionModule,
     AddressesModule,
     NotificationsModule,
     PushModule,
@@ -53,6 +56,7 @@ import { MobileSettingsController } from './mobile-settings.controller';
     MobileAddressesController,
     MobileNotificationsController,
     MobileSettingsController,
+    MobileAppVersionController,
   ],
 })
 export class MobileModule {}

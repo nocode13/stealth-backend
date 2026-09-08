@@ -7,6 +7,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { isTestAccount } from '../common/test-account';
+import { err } from '../i18n/api-error';
+import { ERRORS } from '../i18n/messages';
 
 export interface TokenPair {
   accessToken: string;
@@ -46,7 +48,7 @@ export class AuthService {
   ): Promise<AuthUser> {
     const user = await this.users.findByEmail(email);
     if (!user || !(await this.users.verifyPassword(user, password))) {
-      throw new UnauthorizedException('Неверный email или пароль');
+      throw new UnauthorizedException(err(ERRORS.INVALID_CREDENTIALS));
     }
     return this.toAuthUser(user);
   }
@@ -108,7 +110,7 @@ export class AuthService {
         secret: this.config.get<string>('jwt.refreshSecret'),
       });
     } catch {
-      throw new UnauthorizedException('Невалидный refresh-токен');
+      throw new UnauthorizedException(err(ERRORS.INVALID_REFRESH_TOKEN));
     }
 
     const tokenHash = this.hashToken(refreshToken);
@@ -121,7 +123,7 @@ export class AuthService {
       },
     });
     if (!stored) {
-      throw new UnauthorizedException('Refresh-токен отозван или истёк');
+      throw new UnauthorizedException(err(ERRORS.REFRESH_TOKEN_REVOKED));
     }
 
     // Ротация: гасим использованный токен и выпускаем новую пару.
