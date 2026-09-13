@@ -185,6 +185,17 @@ Query-параметра `lang` нет — глобальный `ValidationPipe(
 везде, где есть `cache.wrap` на локализуемых данных, в `params` добавляется `locale`
 (`{ ...query, locale }` у списков, `{ id, locale }` у одиночных сущностей).
 
+**Описания (`CatalogItemTranslation.description`, `SellerTranslation.description`) — HTML** из
+rich-text редактора админки (tiptap), колонка по-прежнему `TEXT`. Санитайз — **на входе**, в DTO
+(`@Transform(toRichText)` + `@MaxLength(20000)`, `src/common/rich-text.ts`, `sanitize-html`), а не
+на выдаче: пишут описания и продавцы, а мобилка рендерит сохранённое как есть. Allowlist —
+`p, br, strong, em, u, s, h2, h3, ul, ol, li, blockquote` без единого атрибута: ссылок, картинок и
+видео в описании нет по продукту (`a` раскрывается в текст, медиа вырезаются вместе с
+содержимым). Пустой документ редактора (`<p></p>`) санитайзер превращает в `''`, дальше `clean()`
+→ `null` — фолбэк на RU и `auto` работают как с плоским текстом. Мапперы отдают HTML без
+преобразований (`description` мобилке, `translations[].description` админке); старый plain text
+перевела миграция `20260911120000_description_html`.
+
 **`OrderItem` — снапшот сразу по всем локалям**, JSON вместо строки
 (`catalogItemName`/`unit: Json`, `src/i18n/localized-text.ts`: `toLocalizedText`/`pickText`).
 Причина: снапшот заказа обязан пережить смену языка пользователем, поэтому на момент
@@ -720,6 +731,10 @@ Buckets приватные и публичных URL не дают, а ссыл�
   владельцу; заблокировавший бота сотрудник не мешает доставке остальным; сотрудник без
   привязки просто пропускается; рядовой сотрудник получает 403 на `…/staff`, владелец чужого
   продавца — тоже; владельца удалить нельзя (400).
+- описания: `PATCH /admin/catalog/:id` (и `/admin/sellers/:id`) с RU-описанием
+  `<p>ok</p><script>x</script><img src=x><a href="//e">link</a><h1>T</h1>` сохраняет
+  `<p>ok</p>link<h2>T</h2>`; `<p></p>` сохраняется как `null`, а UZ/EN без описания получают
+  RU-фолбэк.
 - мультиязычность: `GET /mobile/categories`/`catalog`/`listings` с `Accept-Language: ru|uz|en`
   отдают плоское `name`/`description`/`unit` на нужном языке, без `nameRu`; без заголовка — RU;
   запрос `ru` → `uz` → `ru` не путает языки (в Redis `KEYS 'sf:*'` три разных ключа на три
