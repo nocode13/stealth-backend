@@ -160,6 +160,7 @@ model User {
   locale          Locale?
   refreshTokens   RefreshToken[]
   cartItems       CartItem[]
+  favorites       Favorite[]
   orders          Order[]
   orderGroups     OrderGroup[]
   savedAddresses  SavedAddress[]
@@ -456,6 +457,7 @@ model Listing {
   updatedAt     DateTime      @updatedAt
 
   cartItems  CartItem[]
+  favorites  Favorite[]
   orderItems OrderItem[]
 
   @@unique([sellerId, catalogItemId])
@@ -481,6 +483,22 @@ model CartItem {
   @@index([userId])
   @@index([listingId])
   @@map("cart_items")
+}
+
+// Избранное покупателя. Как и корзина — без обёртки Favorites/Wishlist, строки висят
+// прямо на User. Архивные/распроданные листинги из избранного НЕ вычищаются — это
+// осознанно (см. FavoritesService.list): клиент помечает их недоступными сам.
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listingId String
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, listingId])
+  @@index([userId, createdAt])
+  @@map("favorites")
 }
 
 // Группа заказов одного чекаута — общие данные оформления (контакты, адрес, оплата,
