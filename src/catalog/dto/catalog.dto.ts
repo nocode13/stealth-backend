@@ -9,10 +9,12 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  MaxLength,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { CursorPaginationDto } from '../../common/dto/pagination.dto';
+import { RICH_TEXT_MAX_LENGTH, toRichText } from '../../common/rich-text';
 
 export class CatalogItemTranslationDto {
   @ApiProperty({ enum: Locale, example: Locale.RU })
@@ -27,9 +29,15 @@ export class CatalogItemTranslationDto {
   @IsString()
   name?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    example: '<p>Свежая <strong>голландская</strong> роза</p>',
+    description:
+      'HTML из rich-text редактора, теги вне allowlist вырезаются. Пусто = не переведено, подставится RU',
+  })
   @IsOptional()
+  @Transform(toRichText)
   @IsString()
+  @MaxLength(RICH_TEXT_MAX_LENGTH)
   description?: string;
 
   @ApiPropertyOptional({ example: 'шт' })

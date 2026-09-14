@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Locale, SellerStatus } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayNotEmpty,
   IsArray,
@@ -8,10 +8,12 @@ import {
   IsEnum,
   IsOptional,
   IsString,
+  MaxLength,
   MinLength,
   ValidateNested,
 } from 'class-validator';
 import { CursorPaginationDto } from '../../common/dto/pagination.dto';
+import { RICH_TEXT_MAX_LENGTH, toRichText } from '../../common/rich-text';
 
 export class SellerTranslationDto {
   @ApiProperty({ enum: Locale, example: Locale.RU })
@@ -26,9 +28,15 @@ export class SellerTranslationDto {
   @IsString()
   name?: string;
 
-  @ApiPropertyOptional({ example: 'Свежие цветы с доставкой по городу' })
+  @ApiPropertyOptional({
+    example: '<p>Свежие цветы с <strong>доставкой</strong> по городу</p>',
+    description:
+      'HTML из rich-text редактора, теги вне allowlist вырезаются. Пусто = не переведено, подставится RU',
+  })
   @IsOptional()
+  @Transform(toRichText)
   @IsString()
+  @MaxLength(RICH_TEXT_MAX_LENGTH)
   description?: string;
 }
 
