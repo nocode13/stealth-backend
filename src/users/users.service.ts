@@ -214,6 +214,7 @@ export class UsersService {
     await this.prisma.$transaction([
       this.prisma.savedAddress.deleteMany({ where: { userId } }),
       this.prisma.cartItem.deleteMany({ where: { userId } }),
+      this.prisma.favorite.deleteMany({ where: { userId } }),
       this.prisma.notification.deleteMany({ where: { userId } }),
       this.prisma.refreshToken.deleteMany({ where: { userId } }),
       this.prisma.pushToken.deleteMany({ where: { userId } }),
