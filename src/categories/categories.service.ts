@@ -25,6 +25,9 @@ import {
 
 const withTranslations = {
   translations: true,
+  // Счётчик позиций каталога для колонки в админке. Считает ВСЕ позиции категории,
+  // без учёта видимости для SELLER — точное число видит SUPER_ADMIN.
+  _count: { select: { catalogItems: true } },
 } satisfies Prisma.CategoryInclude;
 
 // Ищем по ЛЮБОЙ локали: покупатель может искать русское слово на узбекском интерфейсе.
