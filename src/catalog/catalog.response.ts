@@ -12,7 +12,7 @@ export type CatalogItemWithTranslations = Prisma.CatalogItemGetPayload<{
     category: { include: { translations: true } };
     media: true;
   };
-}>;
+}> & { _count?: { listings: number } };
 
 export interface CatalogItemResponse {
   id: string;
@@ -37,6 +37,8 @@ export interface AdminCatalogItemResponse extends CatalogItemResponse {
     unit: string;
     auto: boolean;
   }[];
+  /** Сколько продажных позиций (листингов) заведено по этой позиции каталога. */
+  listingsCount: number;
 }
 
 export const toCatalogItemResponse = (
@@ -66,6 +68,7 @@ export const toAdminCatalogItemResponse = (
   item: CatalogItemWithTranslations,
 ): AdminCatalogItemResponse => ({
   ...toCatalogItemResponse(item, DEFAULT_LOCALE),
+  listingsCount: item._count?.listings ?? 0,
   translations: SUPPORTED_LOCALES.map((locale) => {
     const t = pickTranslation(item.translations, locale);
     return {

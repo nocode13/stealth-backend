@@ -3,7 +3,7 @@ import { pickTranslation } from '../i18n/pick';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '../i18n/locale';
 
 export type CategoryWithTranslations = Prisma.CategoryGetPayload<{
-  include: { translations: true };
+  include: { translations: true; _count: { select: { catalogItems: true } } };
 }>;
 
 /** Мобилка: плоское резолвленное имя, ни одной локали в контракте. */
@@ -19,10 +19,12 @@ export interface CategoryResponse {
 /** Админка: то же + все переводы для формы редактирования. */
 export interface AdminCategoryResponse extends CategoryResponse {
   translations: { locale: Locale; name: string; auto: boolean }[];
+  /** Сколько позиций каталога привязано к категории. */
+  itemsCount: number;
 }
 
 export const toCategoryResponse = (
-  c: CategoryWithTranslations,
+  c: Omit<CategoryWithTranslations, '_count'>,
   locale: Locale,
 ): CategoryResponse => ({
   id: c.id,
@@ -37,6 +39,7 @@ export const toAdminCategoryResponse = (
   c: CategoryWithTranslations,
 ): AdminCategoryResponse => ({
   ...toCategoryResponse(c, DEFAULT_LOCALE),
+  itemsCount: c._count.catalogItems,
   translations: SUPPORTED_LOCALES.map((locale) => {
     const t = pickTranslation(c.translations, locale);
     return { locale, name: t.name, auto: t.auto };
