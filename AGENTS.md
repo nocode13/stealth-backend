@@ -234,8 +234,8 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | Роут | Роли | Эндпоинты |
 |---|---|---|
 | `admin/auth` | — | `POST login` (LocalAuthGuard), `POST logout`, `GET me`, `POST telegram/link`, `POST telegram/unlink` |
-| `admin/categories` | SUPER_ADMIN, SELLER | CRUD + `PATCH /:id/status` — **только SUPER_ADMIN** (`@Roles` на хендлере перебивает класс) |
-| `admin/catalog` | SUPER_ADMIN, SELLER | CRUD + `POST /:id/images`, `DELETE /:id/images/:imageId`, `PATCH /:id/images/:imageId/reorder` |
+| `admin/categories` | SUPER_ADMIN, SELLER | CRUD + `PATCH /:id/status` — **только SUPER_ADMIN** (`@Roles` на хендлере перебивает класс); смена статуса запрещена (409), пока к категории привязана хотя бы одна позиция каталога |
+| `admin/catalog` | SUPER_ADMIN, SELLER | CR + `PATCH /:id` (без `DELETE /:id` — удаления нет, только статус; смена статуса запрещена 409, пока по позиции есть хотя бы один листинг), `POST /:id/media`, `DELETE /:id/media/:mediaId`, `PATCH /:id/media/:mediaId/reorder` |
 | `admin/listings` | SELLER, SUPER_ADMIN | CRUD, `sellerId` из пользователя |
 | `admin/orders` | SELLER, SUPER_ADMIN | `GET /` — группы (фильтр `status`, поиск по номеру группы/заказа/телефону/имени), `GET /:id` (`:id` — id группы), `PATCH /:orderId/status`, `PATCH /:orderId/courier` (`:orderId` — id заказа внутри группы) — **только `SUPER_ADMIN`** |
 | `admin/sellers` | SUPER_ADMIN | CRUD + `POST /:id/image` (баннер) |

@@ -91,11 +91,6 @@ export class AdminCatalogController {
     return this.catalog.update(id, dto, user);
   }
 
-  @Delete(':id')
-  remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.catalog.remove(id, user);
-  }
-
   @Post(':id/media')
   @ApiConsumes('multipart/form-data')
   @ApiOperation({

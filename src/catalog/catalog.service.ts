@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -44,6 +45,8 @@ const withCategory = {
   translations: true,
   category: { include: { translations: true } },
   media: { orderBy: { sortOrder: 'asc' } },
+  // Счётчик продажных позиций: админка дизейблит по нему селект статуса.
+  _count: { select: { listings: true } },
 } satisfies Prisma.CatalogItemInclude;
 
 // Публичный include: недоделанное и упавшее видео на витрину не пускаем. Тот же
@@ -223,6 +226,19 @@ export class CatalogService {
       await this.categories.assertUsable(dto.categoryId, user);
     }
 
+    // Любая смена статуса позиции запрещена, пока по ней есть хотя бы одна
+    // продажная позиция — в любом статусе (DRAFT/ACTIVE/ARCHIVED).
+    if (dto.status !== undefined && dto.status !== item.status) {
+      const listings = await this.prisma.listing.count({
+        where: { catalogItemId: id },
+      });
+      if (listings > 0) {
+        throw new ConflictException(
+          `Нельзя менять статус позиции: по ней есть продажных позиций — ${listings}. Сначала удалите их.`,
+        );
+      }
+    }
+
     // dto.translations не пришёл (частичный PATCH) — переводы не трогаем вообще.
     const rows = dto.translations
       ? normalizeCatalogTranslations(dto.translations)
@@ -253,15 +269,6 @@ export class CatalogService {
     ]);
     await this.cache.bump();
     return this.findOne(id);
-  }
-
-  async remove(id: string, user: AuthUser): Promise<void> {
-    const item = await this.findRaw(id);
-    if (user.role !== Role.SUPER_ADMIN && item.sellerId !== user.sellerId) {
-      throw new ForbiddenException('Чужая позиция справочника');
-    }
-    await this.prisma.catalogItem.delete({ where: { id } });
-    await this.cache.bump();
   }
 
   private async assertOwned(
