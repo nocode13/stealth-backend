@@ -260,6 +260,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | `mobile/listings`, `mobile/categories`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query |
 | `mobile/catalog` | JwtAuthGuard | `GET /` — ⚠️ асимметрия: остальная витрина публичная |
 | `mobile/cart` | JwtAuthGuard | `GET /`, `POST items`, `PATCH/DELETE items/:id`, `DELETE /` |
+| `mobile/favorites` | JwtAuthGuard | `GET /` — `CursorPage<ListingResponse>`, `GET /ids` — `{ listingIds }`, `PUT /:listingId`, `DELETE /:listingId` |
 | `mobile/addresses` | JwtAuthGuard | CRUD, всё scoped по `userId` |
 | `mobile/order-groups` | JwtAuthGuard | `POST /`, `GET /`, `GET /:id`, `POST /:id/cancel` |
 | `mobile/notifications` | JwtAuthGuard | `GET /`, `POST read` |
