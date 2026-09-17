@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -129,6 +130,24 @@ export class CategoriesService {
     return category;
   }
 
+  // Любая смена статуса категории запрещена, пока к ней привязана хотя бы одна
+  // позиция каталога: сначала отвяжите позиции, потом меняйте статус.
+  private async assertStatusChangeAllowed(
+    id: string,
+    currentStatus: ReviewStatus,
+    nextStatus: ReviewStatus | undefined,
+  ): Promise<void> {
+    if (nextStatus === undefined || nextStatus === currentStatus) return;
+    const items = await this.prisma.catalogItem.count({
+      where: { categoryId: id },
+    });
+    if (items > 0) {
+      throw new ConflictException(
+        `Нельзя менять статус категории: к ней привязано позиций каталога — ${items}. Сначала отвяжите их.`,
+      );
+    }
+  }
+
   // Проверяет, что categoryId виден и доступен для использования продавцом
   // (master APPROVED либо собственная APPROVED-категория продавца).
   // SUPER_ADMIN проходит проверку владения всегда — та же логика, что и в
@@ -181,6 +200,7 @@ export class CategoriesService {
     if (dto.status !== undefined && user.role !== Role.SUPER_ADMIN) {
       throw new ForbiddenException('Недостаточно прав');
     }
+    await this.assertStatusChangeAllowed(id, category.status, dto.status);
 
     // dto.translations не пришёл (частичный PATCH) — переводы не трогаем вообще.
     const rows = dto.translations
@@ -207,7 +227,8 @@ export class CategoriesService {
     id: string,
     status: ReviewStatus,
   ): Promise<AdminCategoryResponse> {
-    await this.findRaw(id);
+    const category = await this.findRaw(id);
+    await this.assertStatusChangeAllowed(id, category.status, status);
     const updated = await this.prisma.category.update({
       where: { id },
       data: { status },
