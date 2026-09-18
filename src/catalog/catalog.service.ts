@@ -18,6 +18,7 @@ import { StorageService } from '../storage/storage.service';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CategoriesService } from '../categories/categories.service';
+import { CountriesService } from '../countries/countries.service';
 import { CacheService } from '../cache/cache.service';
 import { withMediaUrls } from './catalog-media.util';
 import { DEFAULT_LOCALE } from '../i18n/locale';
@@ -44,6 +45,7 @@ const MAX_MEDIA_PER_ITEM = 10;
 const withCategory = {
   translations: true,
   category: { include: { translations: true } },
+  country: { include: { translations: true } },
   media: { orderBy: { sortOrder: 'asc' } },
   // Счётчик продажных позиций: админка дизейблит по нему селект статуса.
   _count: { select: { listings: true } },
@@ -55,6 +57,7 @@ const withCategory = {
 export const withCategoryPublic = {
   translations: true,
   category: { include: { translations: true } },
+  country: { include: { translations: true } },
   media: {
     where: { status: MediaStatus.READY },
     orderBy: { sortOrder: 'asc' },
@@ -68,6 +71,7 @@ export class CatalogService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly categories: CategoriesService,
+    private readonly countries: CountriesService,
     private readonly storage: StorageService,
     private readonly cache: CacheService,
   ) {}
@@ -96,6 +100,7 @@ export class CatalogService {
             catalogItem: {
               status: ReviewStatus.APPROVED,
               categoryId: query.noCategory ? null : query.categoryId,
+              countryId: query.countryId,
               ...(query.search
                 ? {
                     translations: {
@@ -136,6 +141,7 @@ export class CatalogService {
     const locale = DEFAULT_LOCALE;
     const itemWhere: Prisma.CatalogItemWhereInput = {
       categoryId: query.noCategory ? null : query.categoryId,
+      countryId: query.countryId,
       freeDelivery: query.freeDelivery ? true : undefined,
       ...(query.search
         ? {
@@ -188,6 +194,9 @@ export class CatalogService {
     if (dto.categoryId) {
       await this.categories.assertUsable(dto.categoryId, user);
     }
+    if (dto.countryId) {
+      await this.countries.assertUsable(dto.countryId);
+    }
     const isSuperAdmin = user.role === Role.SUPER_ADMIN;
     // Продавец не должен назначать себе бесплатную доставку за счёт платформы.
     if (!isSuperAdmin) delete dto.freeDelivery;
@@ -197,6 +206,7 @@ export class CatalogService {
     const created = await this.prisma.catalogItem.create({
       data: {
         categoryId: dto.categoryId,
+        countryId: dto.countryId,
         freeDelivery: dto.freeDelivery,
         sellerId: isSuperAdmin ? null : user.sellerId,
         status: isSuperAdmin ? ReviewStatus.APPROVED : ReviewStatus.PENDING,
@@ -225,6 +235,11 @@ export class CatalogService {
     if (dto.categoryId) {
       await this.categories.assertUsable(dto.categoryId, user);
     }
+    // if (dto.countryId), а не !== undefined: при null проверять нечего, а в data
+    // null должен доехать и снять страну (так же сделано для categoryId).
+    if (dto.countryId) {
+      await this.countries.assertUsable(dto.countryId);
+    }
 
     // Любая смена статуса позиции запрещена, пока по ней есть хотя бы одна
     // продажная позиция — в любом статусе (DRAFT/ACTIVE/ARCHIVED).
@@ -248,6 +263,7 @@ export class CatalogService {
         where: { id },
         data: {
           categoryId: dto.categoryId,
+          countryId: dto.countryId,
           freeDelivery: dto.freeDelivery,
           status: dto.status,
         },

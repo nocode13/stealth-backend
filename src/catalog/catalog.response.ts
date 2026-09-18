@@ -5,11 +5,16 @@ import {
   CategoryResponse,
   toCategoryResponse,
 } from '../categories/category.response';
+import {
+  CountryResponse,
+  toCountryResponse,
+} from '../countries/country.response';
 
 export type CatalogItemWithTranslations = Prisma.CatalogItemGetPayload<{
   include: {
     translations: true;
     category: { include: { translations: true } };
+    country: { include: { translations: true } };
     media: true;
   };
 }> & { _count?: { listings: number } };
@@ -21,6 +26,8 @@ export interface CatalogItemResponse {
   unit: string;
   categoryId: string | null;
   category: CategoryResponse | null;
+  countryId: string | null;
+  country: CountryResponse | null;
   media: CatalogItemMedia[];
   sellerId: string | null;
   status: ReviewStatus;
@@ -53,6 +60,8 @@ export const toCatalogItemResponse = (
     unit: t.unit,
     categoryId: item.categoryId,
     category: item.category ? toCategoryResponse(item.category, locale) : null,
+    countryId: item.countryId,
+    country: item.country ? toCountryResponse(item.country, locale) : null,
     // media отдаём как есть (в БД ключи S3) — полные URL навешивает withMediaUrls
     // ПОСЛЕ cache.wrap, как и раньше.
     media: item.media,

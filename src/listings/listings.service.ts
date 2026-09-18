@@ -31,6 +31,7 @@ const withCatalog = {
     include: {
       translations: true,
       category: { include: { translations: true } },
+      country: { include: { translations: true } },
       media: {
         where: { status: MediaStatus.READY },
         orderBy: { sortOrder: 'asc' },
@@ -86,6 +87,7 @@ export class ListingsService {
             price: buildPriceFilter(query.minPrice, query.maxPrice),
             catalogItem: {
               categoryId: query.categoryId,
+              countryId: query.countryId,
               ...(query.search
                 ? {
                     translations: {
@@ -141,6 +143,7 @@ export class ListingsService {
         price: buildPriceFilter(query.minPrice, query.maxPrice),
         catalogItem: {
           categoryId: query.categoryId,
+          countryId: query.countryId,
           ...(query.search
             ? {
                 translations: {

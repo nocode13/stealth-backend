@@ -12,7 +12,7 @@ const clean = (v?: string | null): string | null => {
  * пустые заполняются значением DEFAULT_LOCALE и помечаются auto: true.
  * RU обязателен — это фолбэк для всех остальных.
  */
-export function normalizeCategoryTranslations(
+export function normalizeNameTranslations(
   input: { locale: Locale; name?: string }[],
 ): { locale: Locale; name: string; auto: boolean }[] {
   const byLocale = new Map(input.map((t) => [t.locale, t]));

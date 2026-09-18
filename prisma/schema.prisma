@@ -329,6 +329,39 @@ model CategoryTranslation {
   @@map("category_translations")
 }
 
+/// Страна происхождения товара — платформенный справочник. Ни sellerId, ни ReviewStatus:
+/// продавец страну не предлагает, только выбирает из готового списка. Заводит SUPER_ADMIN.
+model Country {
+  id           String               @id @default(cuid())
+  /// ISO 3166-1 alpha-2, заглавными. Нужен как стабильный ключ для идемпотентного сида
+  /// (id — cuid, по нему upsert не сделать) и как ключ флага в UI.
+  code         String               @unique
+  translations CountryTranslation[]
+  catalogItems CatalogItem[]
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  @@map("countries")
+}
+
+/// Название страны на одной локали. Тот же инвариант, что у CategoryTranslation:
+/// строка есть для КАЖДОЙ локали всегда. Индекс (locale, name) — сортировка витрины.
+model CountryTranslation {
+  id        String   @id @default(cuid())
+  countryId String
+  country   Country  @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  locale    Locale
+  name      String
+  /// true — перевод не задан, значение скопировано из RU. Админка рисует поле пустым.
+  auto      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([countryId, locale])
+  @@index([locale, name])
+  @@map("country_translations")
+}
+
 // Справочник цветов — master-список (sellerId = null, создаёт SUPER_ADMIN) плюс
 // кастомные позиции, предложенные продавцом (тот же паттерн ревью, что и Category).
 model CatalogItem {
@@ -338,6 +371,10 @@ model CatalogItem {
   // или одобрена, и снять её позже (PATCH с categoryId: null).
   categoryId   String?
   category     Category?                @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  // Страна необязательна — как и категория: позицию можно завести до того, как
+  // страна заведена, и снять её позже (PATCH с countryId: null).
+  countryId    String?
+  country      Country?                 @relation(fields: [countryId], references: [id], onDelete: Restrict)
   media        CatalogItemMedia[]
   sellerId     String?
   seller       Seller?                  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
@@ -352,6 +389,7 @@ model CatalogItem {
   @@index([sellerId])
   @@index([status])
   @@index([categoryId])
+  @@index([countryId])
   @@index([createdAt])
   @@map("catalog")
 }

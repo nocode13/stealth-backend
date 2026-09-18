@@ -66,6 +66,11 @@ export class FindListingsQueryDto extends CursorPaginationDto {
   @IsString()
   categoryId?: string;
 
+  @ApiPropertyOptional({ description: 'Фильтр по стране' })
+  @IsOptional()
+  @IsString()
+  countryId?: string;
+
   // Только для «моих листингов» (админка) — на витрине статус фиксирован (ACTIVE).
   @ApiPropertyOptional({ enum: ListingStatus })
   @IsOptional()
