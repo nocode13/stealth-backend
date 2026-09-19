@@ -18,6 +18,7 @@ import { ListingResponse, toListingResponse } from './listing.response';
 import {
   CreateListingDto,
   FindListingsQueryDto,
+  ListingSort,
   UpdateListingDto,
 } from './dto/listing.dto';
 
@@ -47,6 +48,26 @@ function buildPriceFilter(
 ): Prisma.IntFilter | undefined {
   if (minPrice === undefined && maxPrice === undefined) return undefined;
   return { gte: minPrice, lte: maxPrice };
+}
+
+/**
+ * Порядок выдачи. ⚠️ `id` обязан быть последним в каждой ветке: курсорная пагинация
+ * (`cursor: { id }`, `skip: 1`) детерминирована только при orderBy, заканчивающемся на
+ * уникальном поле. Без тайбрейкера листинги с одинаковой ценой дублируются и пропадают
+ * между страницами. См. контракт в `src/common/pagination.ts`.
+ */
+function buildOrderBy(
+  sort?: ListingSort,
+): Prisma.ListingOrderByWithRelationInput[] {
+  switch (sort) {
+    case ListingSort.PRICE_ASC:
+      return [{ price: 'asc' }, { id: 'asc' }];
+    case ListingSort.PRICE_DESC:
+      return [{ price: 'desc' }, { id: 'desc' }];
+    case ListingSort.NEWEST:
+    default:
+      return [{ createdAt: 'desc' }, { id: 'desc' }];
+  }
 }
 
 @Injectable()
@@ -88,6 +109,10 @@ export class ListingsService {
             catalogItem: {
               categoryId: query.categoryId,
               countryId: query.countryId,
+              // `? true : undefined`, а не голое значение: freeDelivery=false означает
+              // «показать всё», а не «показать только платные». Идиома повторяет
+              // CatalogService.findVisibleFor.
+              freeDelivery: query.freeDelivery ? true : undefined,
               ...(query.search
                 ? {
                     translations: {
@@ -100,7 +125,7 @@ export class ListingsService {
             },
           },
           include: withCatalog,
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          orderBy: buildOrderBy(query.sort),
           cursor: query.cursor ? { id: query.cursor } : undefined,
           skip: query.cursor ? 1 : 0,
           take: query.limit + 1,

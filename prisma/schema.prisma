@@ -502,6 +502,7 @@ model Listing {
   @@index([status])
   @@index([catalogItemId])
   @@index([createdAt])
+  @@index([status, price])
   @@map("listings")
 }
 
