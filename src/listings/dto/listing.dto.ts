@@ -5,8 +5,9 @@ import {
   PartialType,
 } from '@nestjs/swagger';
 import { ListingStatus } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEnum,
   IsInt,
   IsNumber,
@@ -15,6 +16,17 @@ import {
   Min,
 } from 'class-validator';
 import { CursorPaginationDto } from '../../common/dto/pagination.dto';
+
+/**
+ * Порядок выдачи витрины. Параметр опционален: без него сортировка остаётся прежней
+ * (`createdAt desc`) — этого требуют уже выпущенные сборки мобилки, страница продавца,
+ * лента reels и админка.
+ */
+export enum ListingSort {
+  NEWEST = 'newest',
+  PRICE_ASC = 'price_asc',
+  PRICE_DESC = 'price_desc',
+}
 
 export class CreateListingDto {
   @ApiProperty({ description: 'ID позиции справочника' })
@@ -66,6 +78,11 @@ export class FindListingsQueryDto extends CursorPaginationDto {
   @IsString()
   categoryId?: string;
 
+  @ApiPropertyOptional({ description: 'Фильтр по стране' })
+  @IsOptional()
+  @IsString()
+  countryId?: string;
+
   // Только для «моих листингов» (админка) — на витрине статус фиксирован (ACTIVE).
   @ApiPropertyOptional({ enum: ListingStatus })
   @IsOptional()
@@ -93,4 +110,22 @@ export class FindListingsQueryDto extends CursorPaginationDto {
   @IsOptional()
   @IsString()
   sellerId?: string;
+
+  @ApiPropertyOptional({
+    enum: ListingSort,
+    description:
+      'Порядок выдачи. Без параметра — createdAt desc (поведение по умолчанию).',
+  })
+  @IsOptional()
+  @IsEnum(ListingSort)
+  sort?: ListingSort;
+
+  @ApiPropertyOptional({
+    description:
+      'Только позиции из вайтлиста бесплатной доставки (catalogItem.freeDelivery)',
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  freeDelivery?: boolean;
 }

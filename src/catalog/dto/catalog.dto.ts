@@ -62,6 +62,11 @@ export class CreateCatalogItemDto {
   @IsString()
   categoryId?: string;
 
+  @ApiPropertyOptional({ description: 'ID страны (необязательна)' })
+  @IsOptional()
+  @IsString()
+  countryId?: string;
+
   @ApiPropertyOptional({
     description:
       'Позиция из вайтлиста бесплатной доставки. Только SUPER_ADMIN — для остальных игнорируется.',
@@ -93,6 +98,15 @@ export class UpdateCatalogItemDto {
   categoryId?: string | null;
 
   @ApiPropertyOptional({
+    nullable: true,
+    description: 'ID страны; null — снять страну',
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  countryId?: string | null;
+
+  @ApiPropertyOptional({
     description:
       'Позиция из вайтлиста бесплатной доставки. Только SUPER_ADMIN — для остальных игнорируется.',
   })
@@ -116,6 +130,11 @@ export class FindCatalogQueryDto extends CursorPaginationDto {
   @IsOptional()
   @IsString()
   categoryId?: string;
+
+  @ApiPropertyOptional({ description: 'Фильтр по стране' })
+  @IsOptional()
+  @IsString()
+  countryId?: string;
 
   @ApiPropertyOptional({
     description:

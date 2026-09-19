@@ -11,6 +11,7 @@ export type ListingWithTranslations = Prisma.ListingGetPayload<{
       include: {
         translations: true;
         category: { include: { translations: true } };
+        country: { include: { translations: true } };
         media: true;
       };
     };

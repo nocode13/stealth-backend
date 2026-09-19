@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { CategoriesModule } from '../categories/categories.module';
+import { CountriesModule } from '../countries/countries.module';
 import { CatalogModule } from '../catalog/catalog.module';
 import { ListingsModule } from '../listings/listings.module';
 import { MetricsModule } from '../metrics/metrics.module';
@@ -12,6 +13,7 @@ import { StorageModule } from '../storage/storage.module';
 import { TelegramModule } from '../telegram/telegram.module';
 import { AdminAuthController } from './admin-auth.controller';
 import { AdminCategoriesController } from './admin-categories.controller';
+import { AdminCountriesController } from './admin-countries.controller';
 import { AdminCatalogController } from './admin-catalog.controller';
 import { AdminListingsController } from './admin-listings.controller';
 import { AdminMetricsController } from './admin-metrics.controller';
@@ -27,6 +29,7 @@ import { AdminAppVersionsController } from './admin-app-versions.controller';
   imports: [
     AuthModule,
     CategoriesModule,
+    CountriesModule,
     CatalogModule,
     ListingsModule,
     MetricsModule,
@@ -40,6 +43,7 @@ import { AdminAppVersionsController } from './admin-app-versions.controller';
   controllers: [
     AdminAuthController,
     AdminCategoriesController,
+    AdminCountriesController,
     AdminCatalogController,
     AdminListingsController,
     AdminMetricsController,
