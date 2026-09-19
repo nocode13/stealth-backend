@@ -68,6 +68,14 @@ function buildOrderBy(
       return [{ price: 'asc' }, { id: 'asc' }];
     case ListingSort.PRICE_DESC:
       return [{ price: 'desc' }, { id: 'desc' }];
+    // Бесплатная доставка — сортировка, а не фильтр: фильтр прятал половину витрины.
+    // Внутри групп — сначала дешёвые (схлопнуто с price_asc в одну опцию мобилки).
+    case ListingSort.FREE_DELIVERY:
+      return [
+        { catalogItem: { freeDelivery: 'desc' } },
+        { price: 'asc' },
+        { id: 'asc' },
+      ];
     case ListingSort.NEWEST:
     default:
       return [{ createdAt: 'desc' }, { id: 'desc' }];
@@ -132,10 +140,6 @@ export class ListingsService {
             catalogItem: {
               categoryId: query.categoryId,
               countryId: query.countryId,
-              // `? true : undefined`, а не голое значение: freeDelivery=false означает
-              // «показать всё», а не «показать только платные». Идиома повторяет
-              // CatalogService.findVisibleFor.
-              freeDelivery: query.freeDelivery ? true : undefined,
               id: catalogItemIds ? { in: catalogItemIds } : undefined,
             },
           },
