@@ -5,9 +5,8 @@ import {
   PartialType,
 } from '@nestjs/swagger';
 import { ListingStatus } from '@prisma/client';
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
 import {
-  IsBoolean,
   IsEnum,
   IsInt,
   IsNumber,
@@ -26,6 +25,7 @@ export enum ListingSort {
   NEWEST = 'newest',
   PRICE_ASC = 'price_asc',
   PRICE_DESC = 'price_desc',
+  FREE_DELIVERY = 'free_delivery',
 }
 
 export class CreateListingDto {
@@ -114,18 +114,11 @@ export class FindListingsQueryDto extends CursorPaginationDto {
   @ApiPropertyOptional({
     enum: ListingSort,
     description:
-      'Порядок выдачи. Без параметра — createdAt desc (поведение по умолчанию).',
+      'Порядок выдачи. Без параметра — createdAt desc (поведение по умолчанию). ' +
+      'free_delivery — сначала позиции из вайтлиста бесплатной доставки ' +
+      '(catalogItem.freeDelivery), внутри групп — сначала дешёвые.',
   })
   @IsOptional()
   @IsEnum(ListingSort)
   sort?: ListingSort;
-
-  @ApiPropertyOptional({
-    description:
-      'Только позиции из вайтлиста бесплатной доставки (catalogItem.freeDelivery)',
-  })
-  @IsOptional()
-  @Transform(({ value }) => value === 'true' || value === true)
-  @IsBoolean()
-  freeDelivery?: boolean;
 }
