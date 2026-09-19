@@ -42,6 +42,10 @@ const withCatalog = {
   seller: { select: { id: true, translations: true } },
 } satisfies Prisma.ListingInclude;
 
+// Порог word_similarity: 0 = что угодно совпадёт, 1 = точное совпадение.
+// 0.3 ловит опечатки/окончания, не превращая поиск в «покажи всё».
+const FUZZY_SEARCH_THRESHOLD = 0.3;
+
 function buildPriceFilter(
   minPrice?: number,
   maxPrice?: number,
@@ -89,6 +93,22 @@ export class ListingsService {
     };
   }
 
+  // Fuzzy-поиск по названию: word_similarity толерантен к опечаткам и ищет
+  // search как подстроку-слово внутри более длинного названия (в отличие от
+  // similarity(), которая сравнивает строки целиком и на «роза» против «Красная
+  // роза 60 см» даёт низкий скор). Ищет по всем локалям разом — то же поведение,
+  // что было у contains, translations не фильтруются по locale запроса.
+  private async findFuzzyCatalogItemIds(search: string): Promise<string[]> {
+    const rows = await this.prisma.$queryRaw<{ catalogItemId: string }[]>(
+      Prisma.sql`
+        SELECT DISTINCT "catalogItemId"
+        FROM "catalog_item_translations"
+        WHERE word_similarity(lower(${search}), lower("name")) > ${FUZZY_SEARCH_THRESHOLD}
+      `,
+    );
+    return rows.map((r) => r.catalogItemId);
+  }
+
   // Витрина мобилки: только активные листинги. status из query игнорируется — тут
   // всегда ACTIVE + остаток > 0.
   async findStorefront(
@@ -100,6 +120,9 @@ export class ListingsService {
       'listings',
       { ...query, locale },
       async () => {
+        const catalogItemIds = query.search
+          ? await this.findFuzzyCatalogItemIds(query.search)
+          : undefined;
         const rows = await this.prisma.listing.findMany({
           where: {
             status: ListingStatus.ACTIVE,
@@ -113,15 +136,7 @@ export class ListingsService {
               // «показать всё», а не «показать только платные». Идиома повторяет
               // CatalogService.findVisibleFor.
               freeDelivery: query.freeDelivery ? true : undefined,
-              ...(query.search
-                ? {
-                    translations: {
-                      some: {
-                        name: { contains: query.search, mode: 'insensitive' },
-                      },
-                    },
-                  }
-                : {}),
+              id: catalogItemIds ? { in: catalogItemIds } : undefined,
             },
           },
           include: withCatalog,
@@ -161,6 +176,9 @@ export class ListingsService {
     sellerId: string | null,
     query: FindListingsQueryDto,
   ): Promise<CursorPage<ListingResponse>> {
+    const catalogItemIds = query.search
+      ? await this.findFuzzyCatalogItemIds(query.search)
+      : undefined;
     const rows = await this.prisma.listing.findMany({
       where: {
         sellerId: sellerId ?? undefined,
@@ -169,15 +187,7 @@ export class ListingsService {
         catalogItem: {
           categoryId: query.categoryId,
           countryId: query.countryId,
-          ...(query.search
-            ? {
-                translations: {
-                  some: {
-                    name: { contains: query.search, mode: 'insensitive' },
-                  },
-                },
-              }
-            : {}),
+          id: catalogItemIds ? { in: catalogItemIds } : undefined,
         },
       },
       include: withCatalog,
