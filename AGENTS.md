@@ -267,7 +267,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | Роут | Guard | Эндпоинты |
 |---|---|---|
 | `mobile/auth` | JwtAuthGuard на `me`/`logout`/`email/link/*` | `POST telegram/session`, `GET telegram/session/:nonce`, `POST telegram/miniapp`, `POST email/session`, `POST email/verify`, `POST email/link/session`, `POST email/link/verify`, `POST refresh`, `GET/PATCH me`, `POST logout` |
-| `mobile/listings`, `mobile/categories`, `mobile/countries`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query. `mobile/listings` дополнительно принимает `sort` (`newest`\|`price_asc`\|`price_desc`) и `freeDelivery` (boolean) — оба опциональны; без них поведение как раньше (`createdAt desc`, без фильтра доставки). `mobile/countries` отдаёт справочник целиком — фильтра видимости у стран нет |
+| `mobile/listings`, `mobile/categories`, `mobile/countries`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query. `mobile/listings` дополнительно принимает `sort` (`newest`\|`price_asc`\|`price_desc`\|`free_delivery`) — опционален, без него поведение как раньше (`createdAt desc`). `free_delivery` — сначала позиции с `CatalogItem.freeDelivery`, внутри групп сначала дешёвые; фильтра по доставке нет намеренно (он прятал половину витрины). `mobile/countries` отдаёт справочник целиком — фильтра видимости у стран нет |
 | `mobile/catalog` | JwtAuthGuard | `GET /` — ⚠️ асимметрия: остальная витрина публичная |
 | `mobile/cart` | JwtAuthGuard | `GET /`, `POST items`, `PATCH/DELETE items/:id`, `DELETE /` |
 | `mobile/favorites` | JwtAuthGuard | `GET /` — `CursorPage<ListingResponse>`, `GET /ids` — `{ listingIds }`, `PUT /:listingId`, `DELETE /:listingId` |
@@ -645,7 +645,7 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 на публичных эндпоинтах (`findStorefront`/`findAll`) строится запросом **от таблицы
 переводов**, а не от самой сущности (Prisma не умеет `orderBy` по to-many) — курсор при этом
 остаётся id сущности, не id строки перевода, контракт `CursorPage` не меняется. Сортировка
-витрины листингов по цене (`sort=price_asc`/`price_desc`, `ListingsService.buildOrderBy`)
+витрины листингов (`sort=price_asc`/`price_desc`/`free_delivery`, `ListingsService.buildOrderBy`)
 подчиняется тому же правилу: `id` всегда тайбрейкер последним в `orderBy` (`{ price }, { id }`),
 иначе листинги с одинаковой ценой дублируются/пропадают между страницами. Под сортировку по
 цене есть композитный индекс `@@index([status, price])` (витрина всегда фильтрует
