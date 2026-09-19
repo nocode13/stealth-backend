@@ -1,7 +1,15 @@
-import { PrismaClient, Role } from '@prisma/client';
+import { Locale, PrismaClient, Role } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
+
+// Стартовый справочник стран. Расширяется из админки, не кодом.
+// «Голландия» — разговорное название Нидерландов, оставлено как просил заказчик;
+// формальный вариант правится из админки, не кодом.
+const COUNTRIES: { code: string; names: Record<Locale, string> }[] = [
+  { code: 'CN', names: { RU: 'Китай', UZ: 'Xitoy', EN: 'China' } },
+  { code: 'NL', names: { RU: 'Голландия', UZ: 'Gollandiya', EN: 'Netherlands' } },
+];
 
 async function main() {
   // На проде пароль задаётся через env, дефолт — только для локальной разработки.
@@ -22,7 +30,30 @@ async function main() {
     },
   });
 
-  console.log('Seed complete:', { admin: admin.email });
+  // Заводим страны идемпотентно: update: {} — чтобы не затирать переводы,
+  // которые супер-админ уже поправил руками.
+  for (const { code, names } of COUNTRIES) {
+    await prisma.country.upsert({
+      where: { code },
+      // Пусто намеренно: переводы, поправленные супер-админом, сид не затирает.
+      update: {},
+      create: {
+        code,
+        translations: {
+          create: (Object.keys(names) as Locale[]).map((locale) => ({
+            locale,
+            name: names[locale],
+            auto: false,
+          })),
+        },
+      },
+    });
+  }
+
+  console.log('Seed complete:', {
+    admin: admin.email,
+    countries: COUNTRIES.length,
+  });
 }
 
 main()

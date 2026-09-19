@@ -11,7 +11,7 @@ import { CursorPage, toCursorPage } from '../common/pagination';
 import { CacheService } from '../cache/cache.service';
 import { err } from '../i18n/api-error';
 import { ERRORS } from '../i18n/messages';
-import { normalizeCategoryTranslations } from '../i18n/translations.util';
+import { normalizeNameTranslations } from '../i18n/translations.util';
 import {
   AdminCategoryResponse,
   CategoryResponse,
@@ -175,7 +175,7 @@ export class CategoriesService {
     user: AuthUser,
   ): Promise<AdminCategoryResponse> {
     const isSuperAdmin = user.role === Role.SUPER_ADMIN;
-    const rows = normalizeCategoryTranslations(dto.translations);
+    const rows = normalizeNameTranslations(dto.translations);
     const created = await this.prisma.category.create({
       data: {
         sellerId: isSuperAdmin ? null : user.sellerId,
@@ -204,7 +204,7 @@ export class CategoriesService {
 
     // dto.translations не пришёл (частичный PATCH) — переводы не трогаем вообще.
     const rows = dto.translations
-      ? normalizeCategoryTranslations(dto.translations)
+      ? normalizeNameTranslations(dto.translations)
       : null;
     await this.prisma.$transaction([
       this.prisma.category.update({

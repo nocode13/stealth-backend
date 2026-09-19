@@ -24,6 +24,7 @@ const withListing = {
         include: {
           translations: true,
           category: { include: { translations: true } },
+          country: { include: { translations: true } },
           // Корзина — экран покупателя, необработанное видео туда не попадает.
           media: {
             where: { status: MediaStatus.READY },

@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { TelegramModule } from '../telegram/telegram.module';
 import { UsersModule } from '../users/users.module';
 import { CategoriesModule } from '../categories/categories.module';
+import { CountriesModule } from '../countries/countries.module';
 import { CatalogModule } from '../catalog/catalog.module';
 import { ListingsModule } from '../listings/listings.module';
 import { CartModule } from '../cart/cart.module';
@@ -17,6 +18,7 @@ import { PushModule } from '../push/push.module';
 import { StorageModule } from '../storage/storage.module';
 import { MobileAuthController } from './mobile-auth.controller';
 import { MobileCategoriesController } from './mobile-categories.controller';
+import { MobileCountriesController } from './mobile-countries.controller';
 import { MobileCatalogController } from './mobile-catalog.controller';
 import { MobileListingsController } from './mobile-listings.controller';
 import { MobileCartController } from './mobile-cart.controller';
@@ -35,6 +37,7 @@ import { MobileAppVersionController } from './mobile-app-version.controller';
     TelegramModule,
     UsersModule,
     CategoriesModule,
+    CountriesModule,
     CatalogModule,
     ListingsModule,
     CartModule,
@@ -51,6 +54,7 @@ import { MobileAppVersionController } from './mobile-app-version.controller';
   controllers: [
     MobileAuthController,
     MobileCategoriesController,
+    MobileCountriesController,
     MobileCatalogController,
     MobileListingsController,
     MobileCartController,

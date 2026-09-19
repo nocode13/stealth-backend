@@ -103,6 +103,12 @@ src/
   `CatalogItem`: `categoryId?` (nullable, `Restrict`), галерея `media: CatalogItemMedia[]`.
   Общий enum `ReviewStatus`. `freeDelivery: Boolean` —
   вайтлист бесплатной доставки, ставит только `SUPER_ADMIN` (см. «Доставка» ниже).
+- **Country** — страна происхождения товара, платформенный справочник (ближе к
+  `PlatformSettings`, чем к `Category`): в отличие от `Category`/`CatalogItem`/`Seller`, у
+  неё **нет** `sellerId` и **нет** `ReviewStatus` — продавец страну не предлагает, только
+  выбирает из готового списка, заводит и правит список только `SUPER_ADMIN`. `CatalogItem`:
+  `countryId?` (nullable, `Restrict`), симметрично `categoryId`. Название живёт в
+  `CountryTranslation`, тот же инвариант, что у `CategoryTranslation`.
 - **Listing** — предложение продавца поверх позиции: `price`, `stock`, `status`
   (`DRAFT|ACTIVE|ARCHIVED`), `@@unique([sellerId, catalogItemId])`. При создании
   `CatalogService.assertUsable` проверяет, что позиция одобрена и видна этому продавцу.
@@ -160,13 +166,16 @@ src/
 не участвует.
 
 **Хранение — таблица переводов на сущность**, не колонки `nameRu/nameUz/...`:
-`CategoryTranslation`/`CatalogItemTranslation`/`SellerTranslation`, `@@unique([<entity>Id,
-locale])`. Инвариант: у каждой сущности строка перевода есть **для каждой локали всегда** —
-сервис при создании/обновлении дописывает недостающие значением `RU` и ставит `auto: true`
-(«перевод не задан, это копия русского» — админка рисует такое поле пустым). Это же снимает
-фолбэк-логику с пути чтения и делает возможной сортировку/курсорную пагинацию по имени:
-Prisma не умеет `orderBy` по to-many-связи, поэтому список на нужном языке (`findStorefront`
-у категорий/каталога) строится **запросом от таблицы переводов**, а не от самой сущности.
+`CategoryTranslation`/`CatalogItemTranslation`/`SellerTranslation`/`CountryTranslation`,
+`@@unique([<entity>Id, locale])`. Инвариант: у каждой сущности строка перевода есть **для
+каждой локали всегда** — сервис при создании/обновлении дописывает недостающие значением `RU`
+и ставит `auto: true` («перевод не задан, это копия русского» — админка рисует такое поле
+пустым, функция — `normalizeNameTranslations` в `src/i18n/translations.util.ts`, переиспользуют
+`CategoriesService` и `CountriesService`; у `CatalogItem`/`Seller` свои варианты с
+описанием/единицей). Это же снимает фолбэк-логику с пути чтения и делает возможной
+сортировку/курсорную пагинацию по имени: Prisma не умеет `orderBy` по to-many-связи, поэтому
+список на нужном языке (`findStorefront` у категорий/каталога/стран) строится **запросом от
+таблицы переводов**, а не от самой сущности.
 
 **Локаль приходит только заголовком `Accept-Language`** (`src/i18n/locale.ts:
 parseAcceptLanguage`, сопоставляет BCP-47 тег по первичному сабтегу, всё незнакомое → `RU`).
@@ -235,6 +244,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 |---|---|---|
 | `admin/auth` | — | `POST login` (LocalAuthGuard), `POST logout`, `GET me`, `POST telegram/link`, `POST telegram/unlink` |
 | `admin/categories` | SUPER_ADMIN, SELLER | CRUD + `PATCH /:id/status` — **только SUPER_ADMIN** (`@Roles` на хендлере перебивает класс); смена статуса запрещена (409), пока к категории привязана хотя бы одна позиция каталога |
+| `admin/countries` | SUPER_ADMIN | CRUD, `DELETE /:id` — 409, пока к стране привязана хотя бы одна позиция каталога. Платформенный справочник — нет ни `sellerId`, ни ревью, роль ровно одна |
 | `admin/catalog` | SUPER_ADMIN, SELLER | CR + `PATCH /:id` (без `DELETE /:id` — удаления нет, только статус; смена статуса запрещена 409, пока по позиции есть хотя бы один листинг), `POST /:id/media`, `DELETE /:id/media/:mediaId`, `PATCH /:id/media/:mediaId/reorder` |
 | `admin/listings` | SELLER, SUPER_ADMIN | CRUD, `sellerId` из пользователя |
 | `admin/orders` | SELLER, SUPER_ADMIN | `GET /` — группы (фильтр `status`, поиск по номеру группы/заказа/телефону/имени), `GET /:id` (`:id` — id группы), `PATCH /:orderId/status`, `PATCH /:orderId/courier` (`:orderId` — id заказа внутри группы) — **только `SUPER_ADMIN`** |
@@ -257,7 +267,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | Роут | Guard | Эндпоинты |
 |---|---|---|
 | `mobile/auth` | JwtAuthGuard на `me`/`logout`/`email/link/*` | `POST telegram/session`, `GET telegram/session/:nonce`, `POST telegram/miniapp`, `POST email/session`, `POST email/verify`, `POST email/link/session`, `POST email/link/verify`, `POST refresh`, `GET/PATCH me`, `POST logout` |
-| `mobile/listings`, `mobile/categories`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query |
+| `mobile/listings`, `mobile/categories`, `mobile/countries`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query. `mobile/listings` дополнительно принимает `sort` (`newest`\|`price_asc`\|`price_desc`) и `freeDelivery` (boolean) — оба опциональны; без них поведение как раньше (`createdAt desc`, без фильтра доставки). `mobile/countries` отдаёт справочник целиком — фильтра видимости у стран нет |
 | `mobile/catalog` | JwtAuthGuard | `GET /` — ⚠️ асимметрия: остальная витрина публичная |
 | `mobile/cart` | JwtAuthGuard | `GET /`, `POST items`, `PATCH/DELETE items/:id`, `DELETE /` |
 | `mobile/favorites` | JwtAuthGuard | `GET /` — `CursorPage<ListingResponse>`, `GET /ids` — `{ listingIds }`, `PUT /:listingId`, `DELETE /:listingId` |
@@ -611,8 +621,8 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 разные хэши на один запрос. Инвалидация — `INCR sf:ver`: O(1), старые ключи становятся
 недостижимы и истекают сами, без SCAN/DEL.
 
-- Кэшируется **только публичная витрина** (`listings`, `listing`, `categories`, `catalog`,
-  `seller`, `settings`, `app-version`); админские списки — никогда. Пустой `REDIS_URL` →
+- Кэшируется **только публичная витрина** (`listings`, `listing`, `categories`, `countries`,
+  `catalog`, `seller`, `settings`, `app-version`); админские списки — никогда. Пустой `REDIS_URL` →
   кэш выключен. ⚠️ `app-version` — единственное исключение из правила «локаль в `params`»:
   в кэш кладётся сырая строка со всеми тремя языками заметок, локаль резолвится уже
   после, в `AppVersionService.check()`.
@@ -634,7 +644,12 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 уведомлений идёт по своему `seq` и этот контракт не использует. ⚠️ Витрина категорий/каталога
 на публичных эндпоинтах (`findStorefront`/`findAll`) строится запросом **от таблицы
 переводов**, а не от самой сущности (Prisma не умеет `orderBy` по to-many) — курсор при этом
-остаётся id сущности, не id строки перевода, контракт `CursorPage` не меняется.
+остаётся id сущности, не id строки перевода, контракт `CursorPage` не меняется. Сортировка
+витрины листингов по цене (`sort=price_asc`/`price_desc`, `ListingsService.buildOrderBy`)
+подчиняется тому же правилу: `id` всегда тайбрейкер последним в `orderBy` (`{ price }, { id }`),
+иначе листинги с одинаковой ценой дублируются/пропадают между страницами. Под сортировку по
+цене есть композитный индекс `@@index([status, price])` (витрина всегда фильтрует
+`status: ACTIVE`).
 
 ## Фото
 

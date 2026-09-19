@@ -21,6 +21,7 @@ const withListing = {
         include: {
           translations: true,
           category: { include: { translations: true } },
+          country: { include: { translations: true } },
           media: {
             where: { status: MediaStatus.READY },
             orderBy: { sortOrder: 'asc' },
