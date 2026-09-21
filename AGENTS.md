@@ -418,7 +418,10 @@ upsert **по самому токену**, а не по паре с `userId`: т
 `GET /mobile/notifications?after&limit` → `{ items, cursor, unreadCount }`;
 `POST …/read` (`ids?`, без них — все; ownership обеспечивает скоуп по `userId`, id от клиента
 ничего не доказывают). Лента — поллинг, без websocket.
-`POST …/push-token` (`{ token, platform }`) и `DELETE …/push-token` (`{ token }`, зовётся при
+`POST …/push-token` (`{ token, platform, deviceId? }` — `deviceId` = Android ID / iOS
+idForVendor, переживает переустановку; при регистрации прочие токены того же устройства
+удаляются, иначе каждая переустановка оставляла мёртвый токен, который FCM долго принимает без
+ошибки) и `DELETE …/push-token` (`{ token }`, зовётся при
 логауте: удаляем только этот токен, выход на одном устройстве не гасит пуши на остальных).
 
 ⚠️ Курсор — `seq Int @unique @default(autoincrement())`, **не `createdAt`**: в Postgres `now()`
@@ -448,7 +451,8 @@ SUPER_ADMIN пишет покупателям вручную из админки
 - **Лента пишется синхронно** в `create()` (`createMany` пачками), push и Telegram — в фоне
   (`void deliver()`): очереди нет, прод — одна реплика. Рестарт посреди доставки её обрывает —
   `onModuleInit` переводит зависшие `SENDING` в `FAILED`.
-- Push — `PushService.sendMany` (счёт по тикетам, т.е. по установкам). Telegram —
+- Push — `PushService.sendMany` (флаг на каждую установку); счётчики — по **людям**: отправлен =
+  Expo принял хотя бы на одну установку, юзеры без токенов не считаются. Telegram —
   `TelegramNotifyService.sendBroadcastToCustomer`, который, в отличие от остальных методов,
   **возвращает исход**: ~25 сообщений/с, на 429 ждём `retry_after`, 403 (бот заблокирован)
   считается в `tgBlocked`, а не в ошибки.

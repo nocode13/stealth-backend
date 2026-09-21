@@ -9,6 +9,7 @@ import {
   IsString,
   Matches,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -48,6 +49,15 @@ export class RegisterPushTokenDto {
   @ApiProperty({ enum: ['android', 'ios'] })
   @IsIn(['android', 'ios'])
   platform!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Android ID / iOS identifierForVendor. Прежние токены того же устройства удаляются',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  deviceId?: string;
 }
 
 export class UnregisterPushTokenDto {

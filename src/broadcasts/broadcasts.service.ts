@@ -290,21 +290,31 @@ export class BroadcastsService implements OnModuleInit {
         };
 
         if (b.sendPush) {
+          // Считаем людей, а не установки: у одного юзера бывает несколько
+          // токенов (устройства, переустановки), и «push: 20» при одном
+          // получателе ничего админу не говорит. Отправлен = принят Expo хотя бы
+          // на одну установку; юзеры без токенов в счётчики не попадают.
+          const owners: string[] = [];
           const messages: ExpoPushMessage[] = users.flatMap((u) => {
             const c = content[u.locale ?? DEFAULT_LOCALE];
-            return u.pushTokens.map((t) => ({
-              to: t.token,
-              title: c.title,
-              body: c.pushBody,
-              data: { type: NotificationType.BROADCAST, broadcastId: b.id },
-              sound: 'default' as const,
-              channelId: PUSH_CHANNEL_ID,
-            }));
+            return u.pushTokens.map((t) => {
+              owners.push(u.id);
+              return {
+                to: t.token,
+                title: c.title,
+                body: c.pushBody,
+                data: { type: NotificationType.BROADCAST, broadcastId: b.id },
+                sound: 'default' as const,
+                channelId: PUSH_CHANNEL_ID,
+              };
+            });
           });
           if (messages.length > 0) {
-            const res = await this.push.sendMany(messages);
-            stats.pushSent += res.ok;
-            stats.pushFailed += res.failed;
+            const delivered = await this.push.sendMany(messages);
+            const reached = new Set(owners.filter((_, i) => delivered[i]));
+            const withTokens = new Set(owners);
+            stats.pushSent += reached.size;
+            stats.pushFailed += withTokens.size - reached.size;
           }
         }
 

@@ -800,12 +800,20 @@ model PushToken {
   token    String @unique
   platform String // 'android' | 'ios'
 
+  // Идентификатор устройства от мобилки (Android ID / iOS identifierForVendor).
+  // Переживает переустановку, а токен — нет: без него каждая переустановка
+  // оставляла мёртвый токен, который FCM ещё долго принимает без ошибки. При
+  // регистрации все прочие токены с тем же deviceId удаляются. null — старые
+  // сборки, которые его не шлют (и iOS, если idForVendor недоступен).
+  deviceId String?
+
   // Обновляется при каждой перерегистрации — по нему видно мёртвые установки,
   // если их не успел вычистить DeviceNotRegistered из receipts.
   lastSeenAt DateTime @default(now())
   createdAt  DateTime @default(now())
 
   @@index([userId])
+  @@index([deviceId])
   @@map("push_tokens")
 }
 
@@ -838,7 +846,7 @@ model Broadcast {
 
   // Сколько строк ленты записано (= живые покупатели на момент отправки).
   recipientsCount Int @default(0)
-  // Push считается по установкам (тикетам Expo), а не по людям.
+  // Push считается по людям: отправлен = Expo принял хотя бы на одну установку.
   pushSent        Int @default(0)
   pushFailed      Int @default(0)
   tgSent          Int @default(0)
