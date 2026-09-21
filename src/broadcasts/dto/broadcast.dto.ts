@@ -97,7 +97,9 @@ export class BroadcastAudienceDto {
     type: [String],
     description: 'id покупателей, обязателен при audience = SELECTED',
   })
-  @ValidateIf((o: BroadcastAudienceDto) => o.audience === BroadcastAudience.SELECTED)
+  @ValidateIf(
+    (o: BroadcastAudienceDto) => o.audience === BroadcastAudience.SELECTED,
+  )
   @IsArray()
   @ArrayNotEmpty()
   @ArrayMaxSize(SELECTED_MAX)

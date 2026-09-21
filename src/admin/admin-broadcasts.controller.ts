@@ -47,7 +47,8 @@ export class AdminBroadcastsController {
   @HttpCode(200)
   @ApiOperation({
     summary: 'Сколько покупателей получит рассылку',
-    description: 'total — строк в ленте, withPush / withTelegram — достижимы по каналу.',
+    description:
+      'total — строк в ленте, withPush / withTelegram — достижимы по каналу.',
   })
   audienceCount(@Body() dto: BroadcastAudienceDto) {
     return this.broadcasts.countAudience(dto);

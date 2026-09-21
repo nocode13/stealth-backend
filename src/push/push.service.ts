@@ -87,15 +87,14 @@ export class PushService {
   async sendMany(
     messages: ExpoPushMessage[],
   ): Promise<{ ok: number; failed: number }> {
-    const valid: ExpoPushMessage[] = [];
+    // Фильтр, а не if/else по isExpoPushToken: это type guard к `string`, и в
+    // else-ветке токен сужался бы до never.
+    const valid = messages.filter((m) => Expo.isExpoPushToken(m.to));
     for (const message of messages) {
-      const token = message.to as string;
-      if (Expo.isExpoPushToken(token)) {
-        valid.push(message);
-      } else {
-        this.logger.warn(`Невалидный push-токен, удаляю: ${token}`);
-        await this.tokens.unregister(token);
-      }
+      if (valid.includes(message)) continue;
+      const token = String(message.to);
+      this.logger.warn(`Невалидный push-токен, удаляю: ${token}`);
+      await this.tokens.unregister(token);
     }
     const invalid = messages.length - valid.length;
     if (valid.length === 0) return { ok: 0, failed: invalid };
