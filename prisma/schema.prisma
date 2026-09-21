@@ -109,6 +109,21 @@ enum PaymentStatus {
 enum NotificationType {
   ORDER_STATUS_CHANGED // legacy: событие по одному Order, больше не эмитится
   ORDER_GROUP_STATUS_CHANGED // статус ГРУППЫ (всего чекаута) изменился
+  BROADCAST // ручная рассылка из админки, см. model Broadcast
+}
+
+// Кому ушла рассылка: всем живым покупателям или списку из Broadcast.recipientIds.
+enum BroadcastAudience {
+  ALL
+  SELECTED
+}
+
+// SENDING — строки ленты уже записаны, push/Telegram доставляются в фоне.
+// FAILED — доставка упала или процесс перезапустился посреди неё (очереди нет).
+enum BroadcastStatus {
+  SENDING
+  DONE
+  FAILED
 }
 
 // Платформы, для которых мы держим версию приложения в сторе. Отдельный енам, а не
@@ -166,6 +181,7 @@ model User {
   savedAddresses  SavedAddress[]
   notifications   Notification[]
   pushTokens      PushToken[]
+  broadcasts      Broadcast[]
   // deletedAt — юзер удалил аккаунт из мобилки. Строку не удаляем: Order.userId
   // стоит Restrict, а заказы обязаны пережить удаление ради отчётности (их
   // персональный снапшот при этом затирается). Всё остальное — профиль, адреса,
@@ -754,6 +770,9 @@ model Notification {
   // status здесь OrderGroupStatus, то есть бывает и PARTIALLY_DELIVERED.
   // У строк legacy-типа ORDER_STATUS_CHANGED лежит { orderId, orderNumber, status }:
   // они остаются в ленте как есть, поэтому бутстрап-страница бывает смешанной.
+  // Для BROADCAST: { broadcastId, title, body } — текст свободный, из кода клиента
+  // его не собрать, поэтому title/body лежат сразу всеми языками (LocalizedText,
+  // { RU, UZ, EN }), body — plain text. Язык выбирает клиент.
   payload Json
 
   readAt    DateTime?
@@ -788,4 +807,48 @@ model PushToken {
 
   @@index([userId])
   @@map("push_tokens")
+}
+
+// Ручная рассылка из админки (история + счётчики доставки). Получатель видит её
+// строкой Notification с type BROADCAST — лента остаётся источником правды, push и
+// Telegram поверх неё, как у уведомлений о заказах.
+model Broadcast {
+  id String @id @default(cuid())
+
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id])
+
+  // LocalizedText ({ RU, UZ?, EN? }), RU обязателен — он же фолбэк (pickText).
+  // body — HTML из tiptap: в Telegram уходит разметкой, в push и ленту — plain text.
+  title Json
+  body  Json
+
+  // Inline-кнопка под сообщением в Telegram. Обе части или ни одной.
+  buttonText Json?
+  buttonUrl  String?
+
+  sendPush     Boolean
+  sendTelegram Boolean
+
+  audience     BroadcastAudience
+  // Только для SELECTED — id выбранных покупателей.
+  recipientIds String[]
+
+  status BroadcastStatus @default(SENDING)
+
+  // Сколько строк ленты записано (= живые покупатели на момент отправки).
+  recipientsCount Int @default(0)
+  // Push считается по установкам (тикетам Expo), а не по людям.
+  pushSent        Int @default(0)
+  pushFailed      Int @default(0)
+  tgSent          Int @default(0)
+  tgFailed        Int @default(0)
+  // 403 от Telegram: юзер заблокировал бота — отдельно, это не сбой доставки.
+  tgBlocked       Int @default(0)
+
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([createdAt])
+  @@map("broadcasts")
 }

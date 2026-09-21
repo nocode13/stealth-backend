@@ -11,6 +11,8 @@ import { SettingsModule } from '../settings/settings.module';
 import { AppVersionModule } from '../app-version/app-version.module';
 import { StorageModule } from '../storage/storage.module';
 import { TelegramModule } from '../telegram/telegram.module';
+import { BroadcastsModule } from '../broadcasts/broadcasts.module';
+import { UsersModule } from '../users/users.module';
 import { AdminAuthController } from './admin-auth.controller';
 import { AdminCategoriesController } from './admin-categories.controller';
 import { AdminCountriesController } from './admin-countries.controller';
@@ -22,6 +24,8 @@ import { AdminSellersController } from './admin-sellers.controller';
 import { AdminSellerStaffController } from './admin-seller-staff.controller';
 import { AdminSettingsController } from './admin-settings.controller';
 import { AdminAppVersionsController } from './admin-app-versions.controller';
+import { AdminBroadcastsController } from './admin-broadcasts.controller';
+import { AdminCustomersController } from './admin-customers.controller';
 
 // API-поверхность админки. Логика — в доменных модулях, тут только контроллеры
 // с session-guard'ами и Swagger-тегами.
@@ -39,6 +43,8 @@ import { AdminAppVersionsController } from './admin-app-versions.controller';
     AppVersionModule,
     StorageModule,
     TelegramModule,
+    BroadcastsModule,
+    UsersModule,
   ],
   controllers: [
     AdminAuthController,
@@ -52,6 +58,8 @@ import { AdminAppVersionsController } from './admin-app-versions.controller';
     AdminSellerStaffController,
     AdminSettingsController,
     AdminAppVersionsController,
+    AdminBroadcastsController,
+    AdminCustomersController,
   ],
 })
 export class AdminModule {}
