@@ -13,6 +13,8 @@ import { isTestAccount } from '../common/test-account';
 import { err } from '../i18n/api-error';
 import { ERRORS } from '../i18n/messages';
 import { isTerminal } from '../orders/order-status';
+import { toCursorPage, type CursorPage } from '../common/pagination';
+import type { FindCustomersQueryDto } from './dto/customer.dto';
 
 @Injectable()
 export class UsersService {
@@ -262,4 +264,48 @@ export class UsersService {
     if (!user.passwordHash) return Promise.resolve(false);
     return bcrypt.compare(password, user.passwordHash);
   }
+
+  // Живые покупатели для админки (выбор получателей рассылки). Только поля,
+  // по которым админ узнаёт человека, — без токенов и хэшей.
+  async findCustomers(
+    query: FindCustomersQueryDto,
+  ): Promise<CursorPage<CustomerListItem>> {
+    const search = query.search?.trim();
+    const rows = await this.prisma.user.findMany({
+      where: {
+        role: Role.CUSTOMER,
+        deletedAt: null,
+        ...(search
+          ? {
+              OR: [
+                { name: { contains: search, mode: 'insensitive' as const } },
+                { phone: { contains: search } },
+                { email: { contains: search, mode: 'insensitive' as const } },
+                { telegramId: { contains: search } },
+              ],
+            }
+          : {}),
+      },
+      select: CUSTOMER_SELECT,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      cursor: query.cursor ? { id: query.cursor } : undefined,
+      skip: query.cursor ? 1 : 0,
+      take: query.limit + 1,
+    });
+    return toCursorPage(rows, query.limit);
+  }
 }
+
+const CUSTOMER_SELECT = {
+  id: true,
+  name: true,
+  phone: true,
+  email: true,
+  telegramId: true,
+  locale: true,
+  createdAt: true,
+} satisfies Prisma.UserSelect;
+
+export type CustomerListItem = Prisma.UserGetPayload<{
+  select: typeof CUSTOMER_SELECT;
+}>;

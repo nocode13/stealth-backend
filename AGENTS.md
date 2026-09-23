@@ -253,6 +253,8 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | `admin/metrics` | SUPER_ADMIN | `GET users`, `GET orders`, `GET catalog`, `GET overview` |
 | `admin/settings` | SUPER_ADMIN | `GET /`, `PATCH /` — тариф доставки/порог бесплатной доставки |
 | `admin/app-versions` | SUPER_ADMIN | `GET /`, `PATCH /:platform` — версии приложения в сторах |
+| `admin/broadcasts` | SUPER_ADMIN | `GET /`, `GET /:id`, `POST /audience-count`, `POST /` — ручные рассылки покупателям (см. «Уведомления → Рассылки») |
+| `admin/customers` | SUPER_ADMIN | `GET /?search` — живые покупатели, выбор получателей рассылки |
 
 `SELLER` жёстко скоупится своим `sellerId`; его query-параметр `sellerId` игнорируется.
 
@@ -273,7 +275,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | `mobile/favorites` | JwtAuthGuard | `GET /` — `CursorPage<ListingResponse>`, `GET /ids` — `{ listingIds }`, `PUT /:listingId`, `DELETE /:listingId` |
 | `mobile/addresses` | JwtAuthGuard | CRUD, всё scoped по `userId` |
 | `mobile/order-groups` | JwtAuthGuard | `POST /`, `GET /`, `GET /:id`, `POST /:id/cancel` |
-| `mobile/notifications` | JwtAuthGuard | `GET /`, `POST read` |
+| `mobile/notifications` | JwtAuthGuard | `GET /`, `POST read`, `POST push-token`, `DELETE push-token` |
 | `mobile/settings` | **публичный** | `GET /` — `{ deliveryFee, freeDeliveryThreshold }`, как остальная витрина |
 | `mobile/app-version` | **публичный** | `GET /?platform&version` — вердикт по обновлению из стора |
 
@@ -416,7 +418,10 @@ upsert **по самому токену**, а не по паре с `userId`: т
 `GET /mobile/notifications?after&limit` → `{ items, cursor, unreadCount }`;
 `POST …/read` (`ids?`, без них — все; ownership обеспечивает скоуп по `userId`, id от клиента
 ничего не доказывают). Лента — поллинг, без websocket.
-`POST …/push-token` (`{ token, platform }`) и `DELETE …/push-token` (`{ token }`, зовётся при
+`POST …/push-token` (`{ token, platform, deviceId? }` — `deviceId` = Android ID / iOS
+idForVendor, переживает переустановку; при регистрации прочие токены того же устройства
+удаляются, иначе каждая переустановка оставляла мёртвый токен, который FCM долго принимает без
+ошибки) и `DELETE …/push-token` (`{ token }`, зовётся при
 логауте: удаляем только этот токен, выход на одном устройстве не гасит пуши на остальных).
 
 ⚠️ Курсор — `seq Int @unique @default(autoincrement())`, **не `createdAt`**: в Postgres `now()`
@@ -426,6 +431,33 @@ upsert **по самому токену**, а не по паре с `userId`: т
 пустой странице — эхом присланный). `payload: Json` хранит данные события, а не текст: i18n в
 клиенте. `NotificationsService` не знает ни про заказы, ни про Telegram — поэтому
 `OrdersModule` импортирует его без `forwardRef`.
+
+### Рассылки (`src/broadcasts/`)
+
+SUPER_ADMIN пишет покупателям вручную из админки: `Broadcast` — история и счётчики, каждому
+получателю — строка ленты `NotificationType.BROADCAST`. Аудитория — `ALL` (все `CUSTOMER` без
+`deletedAt`) или `SELECTED` (`recipientIds`); кто зарегистрировался после `Broadcast.createdAt`,
+не попадает.
+
+- **Тексты — `LocalizedText` сразу всеми языками**: `title`, `body`, `buttonText` (RU
+  обязателен, пустые UZ/EN не сохраняются — `pickText` падает на RU). Это исключение из
+  «текст живёт на клиенте»: текст свободный, в коде клиента его нет. Payload ленты —
+  `{ broadcastId, title, body }`, где `body` уже **plain text** всеми языками, язык выбирает
+  клиент. `data` пуша — `{ type: 'BROADCAST', broadcastId }`.
+- **`body` — HTML из tiptap.** `telegram-html.ts` приводит его к allowlist'у
+  (`sanitizeBroadcastHtml`, это и сохраняется) и рендерит в два формата: HTML-подмножество Bot
+  API (абзацы/заголовки/списки разворачиваются в переносы и «• »/«1. » — лишний тег даёт 400
+  на всё сообщение) и plain text для push/ленты. Лимит — 3500 символов plain text.
+- **Лента пишется синхронно** в `create()` (`createMany` пачками), push и Telegram — в фоне
+  (`void deliver()`): очереди нет, прод — одна реплика. Рестарт посреди доставки её обрывает —
+  `onModuleInit` переводит зависшие `SENDING` в `FAILED`.
+- Push — `PushService.sendMany` (флаг на каждую установку); счётчики — по **людям**: отправлен =
+  Expo принял хотя бы на одну установку, юзеры без токенов не считаются. Telegram —
+  `TelegramNotifyService.sendBroadcastToCustomer`, который, в отличие от остальных методов,
+  **возвращает исход**: ~25 сообщений/с, на 429 ждём `retry_after`, 403 (бот заблокирован)
+  считается в `tgBlocked`, а не в ошибки.
+- Android-канал пуша — пока `'orders'`: канал должен существовать на устройстве, иначе Android
+  8+ пуш не покажет.
 
 ## Telegram
 

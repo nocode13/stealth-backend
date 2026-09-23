@@ -1,7 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Api } from 'grammy';
+import { Api, GrammyError } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
+
+export type BroadcastSendResult =
+  | { status: 'ok' | 'blocked' | 'error' }
+  | { status: 'retry'; retryAfter: number };
 
 /**
  * ИСХОДЯЩИЕ сообщения ботов. Держит собственные `Api` (это просто HTTP-клиенты к
@@ -61,6 +65,42 @@ export class TelegramNotifyService {
     replyMarkup?: InlineKeyboardMarkup,
   ): Promise<void> {
     return this.send(this.sellerApi, staffTelegramId, text, replyMarkup);
+  }
+
+  /**
+   * Сообщение рассылки покупателю. В отличие от остальных методов не глотает
+   * исход молча, а возвращает его: рассылке нужны счётчики и повтор после 429
+   * (Bot API ограничивает ~30 сообщений в секунду на бота).
+   */
+  async sendBroadcastToCustomer(
+    telegramId: string,
+    html: string,
+    replyMarkup?: InlineKeyboardMarkup,
+  ): Promise<BroadcastSendResult> {
+    if (!this.mainApi) return { status: 'error' };
+    try {
+      await this.mainApi.sendMessage(telegramId, html, {
+        parse_mode: 'HTML',
+        reply_markup: replyMarkup,
+        link_preview_options: { is_disabled: true },
+      });
+      return { status: 'ok' };
+    } catch (error) {
+      if (error instanceof GrammyError) {
+        if (error.error_code === 429) {
+          return {
+            status: 'retry',
+            retryAfter: error.parameters.retry_after ?? 1,
+          };
+        }
+        // 403 — бот заблокирован / юзер деактивирован: это не сбой, а отписка.
+        if (error.error_code === 403) return { status: 'blocked' };
+      }
+      this.logger.error(
+        `Не удалось отправить рассылку ${telegramId}: ${(error as Error).message}`,
+      );
+      return { status: 'error' };
+    }
   }
 
   /**

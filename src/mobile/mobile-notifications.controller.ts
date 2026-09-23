@@ -72,7 +72,12 @@ export class MobileNotificationsController {
     @CurrentUser('id') userId: string,
     @Body() dto: RegisterPushTokenDto,
   ) {
-    await this.pushTokens.register(userId, dto.token, dto.platform);
+    await this.pushTokens.register(
+      userId,
+      dto.token,
+      dto.platform,
+      dto.deviceId,
+    );
   }
 
   @Delete('push-token')
