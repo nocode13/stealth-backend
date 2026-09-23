@@ -13,15 +13,27 @@ import { PrismaService } from '../prisma/prisma.service';
 export class PushTokensService {
   constructor(private readonly prisma: PrismaService) {}
 
-  register(
+  // С deviceId заодно вычищаем прежние токены того же устройства (переустановки,
+  // новые сборки) — у любого юзера: устройство одно, живая установка на нём тоже
+  // одна, и это она. Без этого на каждого человека копились десятки мёртвых
+  // токенов, которые FCM долго принимает без DeviceNotRegistered.
+  async register(
     userId: string,
     token: string,
     platform: string,
+    deviceId?: string,
   ): Promise<PushToken> {
-    return this.prisma.pushToken.upsert({
-      where: { token },
-      create: { userId, token, platform },
-      update: { userId, platform, lastSeenAt: new Date() },
+    return this.prisma.$transaction(async (tx) => {
+      if (deviceId) {
+        await tx.pushToken.deleteMany({
+          where: { deviceId, token: { not: token } },
+        });
+      }
+      return tx.pushToken.upsert({
+        where: { token },
+        create: { userId, token, platform, deviceId },
+        update: { userId, platform, deviceId, lastSeenAt: new Date() },
+      });
     });
   }
 

@@ -77,6 +77,45 @@ export class PushService {
     }
   }
 
+  /**
+   * Пачка готовых сообщений разным юзерам — для рассылок. Текст у каждого свой
+   * (язык юзера), поэтому на вход сообщения, а не payload. `to` — один токен.
+   *
+   * Тоже «мягкий»: сбой Expo засчитывается как неотправка всей пачки, а не бросается.
+   * @returns по флагу на каждое входное сообщение (в том же порядке): принял ли
+   * его Expo. Вызывающий сам сворачивает их по людям — у юзера бывает несколько
+   * установок.
+   */
+  async sendMany(messages: ExpoPushMessage[]): Promise<boolean[]> {
+    // Фильтр, а не if/else по isExpoPushToken: это type guard к `string`, и в
+    // else-ветке токен сужался бы до never.
+    const valid = messages.filter((m) => Expo.isExpoPushToken(m.to));
+    for (const message of messages) {
+      if (valid.includes(message)) continue;
+      const token = String(message.to);
+      this.logger.warn(`Невалидный push-токен, удаляю: ${token}`);
+      await this.tokens.unregister(token);
+    }
+    const delivered = new Map<ExpoPushMessage, boolean>();
+
+    if (valid.length > 0) {
+      try {
+        const tickets = await this.sendChunks(valid);
+        await this.dropDeadTokens(
+          tickets,
+          valid.map((m) => m.to as string),
+        );
+        void this.checkReceipts(tickets);
+        // Тикеты идут в порядке сообщений — как и в dropDeadTokens.
+        valid.forEach((m, i) => delivered.set(m, tickets[i]?.status === 'ok'));
+      } catch (e) {
+        this.logger.error(`Не удалось отправить push-пачку: ${String(e)}`);
+      }
+    }
+
+    return messages.map((m) => delivered.get(m) ?? false);
+  }
+
   private async sendChunks(
     messages: ExpoPushMessage[],
   ): Promise<ExpoPushTicket[]> {
