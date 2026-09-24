@@ -86,12 +86,10 @@ export class TelegramAuthService {
     const telegramId = String(from.id);
     // Продавцу вход не запрещён: его рабочая учётка живёт на staffTelegramId,
     // покупательская — на telegramId (см. common/telegram-identity.ts).
-    const user =
-      (await this.users.findByTelegramId(telegramId)) ??
-      (await this.users.createFromTelegram({
-        telegramId,
-        name: displayName(from),
-      }));
+    const user = await this.users.findOrCreateByTelegram({
+      telegramId,
+      name: displayName(from),
+    });
 
     await this.prisma.telegramAuthSession.update({
       where: { id: session.id },
