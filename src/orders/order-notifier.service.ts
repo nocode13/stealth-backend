@@ -81,14 +81,15 @@ export class OrderNotifier {
           ]
         : []),
       '',
+      // Продавцу — только себестоимость: розницу и наценку платформы он не видит.
       ...order.items.map(
         (item) =>
           `• ${escapeHtml(pickText(item.catalogItemName, DEFAULT_LOCALE))} — ${item.quantity} ${escapeHtml(
             pickText(item.unit, DEFAULT_LOCALE),
-          )} × ${money(item.price)} = ${money(item.total)}`,
+          )} × ${money(item.costPrice)} = ${money(item.costTotal)}`,
       ),
       '',
-      `<b>Итого: ${money(order.itemsTotal)}</b>`,
+      `<b>К выплате: ${money(order.costTotal)}</b>`,
       `Оплата: наличными курьеру`,
       '',
       `👤 ${escapeHtml(order.group.contactName)}`,
@@ -167,10 +168,13 @@ export class OrderNotifier {
               pickText(item.unit, DEFAULT_LOCALE),
             )} × ${money(item.price)} = ${money(item.total)}`,
         ),
-        `Сумма: ${money(order.itemsTotal)}`,
+        `Сумма: ${money(order.itemsTotal)} (продавцу ${money(order.costTotal)})`,
         '',
       ]),
       `<b>Итого по группе: ${money(group.total)}</b>`,
+      `Маржа платформы: ${money(
+        group.orders.reduce((sum, o) => sum + o.itemsTotal - o.costTotal, 0),
+      )}`,
       `Оплата: наличными курьеру`,
       '',
       `👤 ${escapeHtml(group.contactName)}`,

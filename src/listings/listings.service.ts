@@ -4,17 +4,30 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Locale, ListingStatus, MediaStatus, Prisma } from '@prisma/client';
+import {
+  Locale,
+  ListingStatus,
+  MediaStatus,
+  Prisma,
+  Role,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CatalogService } from '../catalog/catalog.service';
 import { withMediaUrls } from '../catalog/catalog-media.util';
 import { CacheService } from '../cache/cache.service';
 import { StorageService } from '../storage/storage.service';
+import { PricingService } from '../pricing/pricing.service';
+import type { CatalogItemResponse } from '../catalog/catalog.response';
 import { err } from '../i18n/api-error';
 import { DEFAULT_LOCALE } from '../i18n/locale';
 import { ERRORS } from '../i18n/messages';
-import { ListingResponse, toListingResponse } from './listing.response';
+import {
+  AdminListingResponse,
+  ListingResponse,
+  toAdminListingResponse,
+  toListingResponse,
+} from './listing.response';
 import {
   CreateListingDto,
   FindListingsQueryDto,
@@ -40,6 +53,12 @@ const withCatalog = {
     },
   },
   seller: { select: { id: true, translations: true } },
+} satisfies Prisma.ListingInclude;
+
+// Админке дополнительно нужно сработавшее правило цены (видит только SUPER_ADMIN).
+const withAdminCatalog = {
+  ...withCatalog,
+  appliedRule: { select: { id: true, name: true } },
 } satisfies Prisma.ListingInclude;
 
 // Порог word_similarity: 0 = что угодно совпадёт, 1 = точное совпадение.
@@ -89,12 +108,15 @@ export class ListingsService {
     private readonly catalog: CatalogService,
     private readonly cache: CacheService,
     private readonly storage: StorageService,
+    private readonly pricing: PricingService,
   ) {}
 
   // catalogItem.media хранит ключи S3-объектов — здесь собираем полные URL для ответа.
   // Кэш (findStorefront/findOnePublic) хранит сырые ключи: мэппинг применяется ПОСЛЕ
   // cache.wrap(), как и в CatalogService.
-  private withUrls(listing: ListingResponse): ListingResponse {
+  private withUrls<T extends { catalogItem: CatalogItemResponse }>(
+    listing: T,
+  ): T {
     return {
       ...listing,
       catalogItem: withMediaUrls(this.storage, listing.catalogItem),
@@ -175,32 +197,41 @@ export class ListingsService {
   }
 
   // Листинги конкретного продавца (админка). sellerId === null — SUPER_ADMIN
-  // смотрит без скоупа: все листинги всех продавцов.
+  // смотрит без скоупа: все листинги всех продавцов. Роль передаётся отдельно:
+  // SUPER_ADMIN с ?sellerId= тоже приходит с непустым sellerId, а видеть он
+  // должен розницу, а не только себестоимость.
   async findForSeller(
     sellerId: string | null,
     query: FindListingsQueryDto,
-  ): Promise<CursorPage<ListingResponse>> {
+    role: Role,
+  ): Promise<CursorPage<AdminListingResponse>> {
     const catalogItemIds = query.search
       ? await this.findFuzzyCatalogItemIds(query.search)
       : undefined;
+    // Продавец розницу не видит — и фильтрует по той цене, которую знает.
+    const priceFilter = buildPriceFilter(query.minPrice, query.maxPrice);
     const rows = await this.prisma.listing.findMany({
       where: {
         sellerId: sellerId ?? undefined,
         status: query.status,
-        price: buildPriceFilter(query.minPrice, query.maxPrice),
+        ...(role === Role.SUPER_ADMIN
+          ? { price: priceFilter }
+          : { costPrice: priceFilter }),
         catalogItem: {
           categoryId: query.categoryId,
           countryId: query.countryId,
           id: catalogItemIds ? { in: catalogItemIds } : undefined,
         },
       },
-      include: withCatalog,
+      include: withAdminCatalog,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       cursor: query.cursor ? { id: query.cursor } : undefined,
       skip: query.cursor ? 1 : 0,
       take: query.limit + 1,
     });
-    const mapped = rows.map((l) => toListingResponse(l, DEFAULT_LOCALE));
+    const mapped = rows.map((l) =>
+      toAdminListingResponse(l, DEFAULT_LOCALE, role),
+    );
     const page = toCursorPage(mapped, query.limit);
     return { ...page, items: page.items.map((l) => this.withUrls(l)) };
   }
@@ -209,34 +240,62 @@ export class ListingsService {
   async findOneForSeller(
     id: string,
     sellerId: string | null,
-  ): Promise<ListingResponse> {
+    role: Role,
+  ): Promise<AdminListingResponse> {
+    const listing = await this.findOwned(id, sellerId);
+    return this.toAdmin(listing, role);
+  }
+
+  private async findOwned(id: string, sellerId: string | null) {
     const listing = await this.prisma.listing.findUnique({
       where: { id },
-      include: withCatalog,
+      include: withAdminCatalog,
     });
     if (!listing) throw new NotFoundException(err(ERRORS.LISTING_NOT_FOUND));
     if (sellerId !== null && listing.sellerId !== sellerId) {
       throw new ForbiddenException('Чужой листинг');
     }
-    return this.withUrls(toListingResponse(listing, DEFAULT_LOCALE));
+    return listing;
+  }
+
+  private toAdmin(
+    listing: Prisma.ListingGetPayload<{ include: typeof withAdminCatalog }>,
+    role: Role,
+  ): AdminListingResponse {
+    return this.withUrls(toAdminListingResponse(listing, DEFAULT_LOCALE, role));
+  }
+
+  // Розница пересчитывается в той же транзакции, что и запись costPrice/stock:
+  // листинг не должен ни на миг оказаться на витрине с устаревшей ценой.
+  private async reloadPriced(tx: Prisma.TransactionClient, id: string) {
+    await this.pricing.recalculate({ id }, tx);
+    return tx.listing.findUniqueOrThrow({
+      where: { id },
+      include: withAdminCatalog,
+    });
   }
 
   async create(
     sellerId: string,
     dto: CreateListingDto,
-  ): Promise<ListingResponse> {
+    role: Role,
+  ): Promise<AdminListingResponse> {
     // sellerId из тела уже разрешён контроллером (SUPER_ADMIN выбирает продавца),
     // в data он не должен попасть повторно.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { sellerId: _, ...data } = dto;
     await this.catalog.assertUsable(data.catalogItemId, sellerId);
     try {
-      const listing = await this.prisma.listing.create({
-        data: { ...data, sellerId },
-        include: withCatalog,
+      const listing = await this.prisma.$transaction(async (tx) => {
+        // price NOT NULL, а посчитать её можно только по уже существующей строке
+        // (категория, правила) — кладём себестоимость и сразу пересчитываем.
+        const created = await tx.listing.create({
+          data: { ...data, price: data.costPrice, sellerId },
+        });
+        return this.reloadPriced(tx, created.id);
       });
       await this.cache.bump();
-      return this.withUrls(toListingResponse(listing, DEFAULT_LOCALE));
+      return this.toAdmin(listing, role);
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -254,19 +313,19 @@ export class ListingsService {
     id: string,
     sellerId: string | null,
     dto: UpdateListingDto,
-  ): Promise<ListingResponse> {
-    await this.findOneForSeller(id, sellerId);
-    const listing = await this.prisma.listing.update({
-      where: { id },
-      data: dto,
-      include: withCatalog,
+    role: Role,
+  ): Promise<AdminListingResponse> {
+    await this.findOwned(id, sellerId);
+    const listing = await this.prisma.$transaction(async (tx) => {
+      await tx.listing.update({ where: { id }, data: dto });
+      return this.reloadPriced(tx, id);
     });
     await this.cache.bump();
-    return this.withUrls(toListingResponse(listing, DEFAULT_LOCALE));
+    return this.toAdmin(listing, role);
   }
 
   async remove(id: string, sellerId: string | null): Promise<void> {
-    await this.findOneForSeller(id, sellerId);
+    await this.findOwned(id, sellerId);
     await this.prisma.listing.delete({ where: { id } });
     await this.cache.bump();
   }

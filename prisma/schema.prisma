@@ -137,6 +137,14 @@ enum AppPlatform {
 // Зачем открывали бота по диплинку. Один вариант сегодня (продавец привязывает Telegram),
 // но модель осталась в форме enum+таблица на случай следующего bot-link флоу — раньше тут
 // был ещё DELIVERY_LOCATION (адрес доставки покупателя), выпилен в пользу пикера карты.
+// Что правило цены делает с себестоимостью (см. src/pricing/price-engine.ts).
+// Новый тип правила = новое значение здесь + одна ветка в applyAction.
+enum PriceRuleAction {
+  MARKUP_PERCENT // цена = себестоимость + value bps (своя наценка вместо платформенной)
+  DISCOUNT_PERCENT // цена = розница по базовой наценке − value bps
+  FIXED_PRICE // цена = value тийинов
+}
+
 enum BotSessionPurpose {
   SELLER_LINK // продавец привязывает свой Telegram к аккаунту админки
 }
@@ -280,6 +288,7 @@ model Seller {
   categories   Category[]
   catalogItems CatalogItem[]
   orders       Order[]
+  priceRules   PriceRule[]
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
@@ -316,6 +325,7 @@ model Category {
   seller       Seller?               @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   status       ReviewStatus          @default(APPROVED)
   catalogItems CatalogItem[]
+  priceRules   PriceRule[]
   createdAt    DateTime              @default(now())
   updatedAt    DateTime              @updatedAt
 
@@ -396,6 +406,7 @@ model CatalogItem {
   seller       Seller?                  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   status       ReviewStatus             @default(APPROVED)
   listings     Listing[]
+  priceRules   PriceRule[]
   /// Позиция из вайтлиста бесплатной доставки. Ставит только SUPER_ADMIN: флаг стоит
   /// платформе денег. Корзина едет бесплатно, только если ВСЕ её позиции с этим флагом.
   freeDelivery Boolean                  @default(false)
@@ -438,6 +449,12 @@ model PlatformSettings {
   deliveryFee           Int  @default(0)
   /// Сумма товаров, с которой доставка бесплатна. null = бесплатной доставки нет.
   freeDeliveryThreshold Int?
+
+  /// Базовая наценка платформы поверх себестоимости, в базисных пунктах (2000 = 20%).
+  /// Действует, когда на листинг не подходит ни одно PriceRule.
+  markupBps         Int @default(2000)
+  /// Шаг округления розничной цены вверх, в тийинах (100 = до целого сума).
+  priceRoundingStep Int @default(100)
 
   updatedAt DateTime @updatedAt
 
@@ -498,13 +515,23 @@ model CatalogItemMedia {
 }
 
 // Предложение продавца поверх позиции справочника + инвентарь (остаток).
+//
+// Две цены: costPrice вводит продавец (столько платформа должна ему), price — розница
+// для покупателя. ⚠️ price НИКТО не пишет руками: это денормализованный результат
+// движка (PricingService.recalculate), пересчитывается при записи, а не при чтении —
+// так витрина сортирует/фильтрует/листает по цене прямо в БД. costPrice в мобилку
+// не уходит никогда.
 model Listing {
   id            String        @id @default(cuid())
   sellerId      String
   seller        Seller        @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   catalogItemId String
   catalogItem   CatalogItem   @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
+  costPrice     Int
   price         Int
+  // Правило, давшее текущую price; null — базовая наценка из PlatformSettings.
+  appliedRuleId String?
+  appliedRule   PriceRule?    @relation("AppliedPriceRule", fields: [appliedRuleId], references: [id], onDelete: SetNull)
   stock         Int           @default(0)
   status        ListingStatus @default(DRAFT)
   createdAt     DateTime      @default(now())
@@ -513,13 +540,54 @@ model Listing {
   cartItems  CartItem[]
   favorites  Favorite[]
   orderItems OrderItem[]
+  priceRules PriceRule[] @relation("PriceRuleListing")
 
   @@unique([sellerId, catalogItemId])
   @@index([status])
   @@index([catalogItemId])
   @@index([createdAt])
   @@index([status, price])
+  @@index([appliedRuleId])
   @@map("listings")
+}
+
+// Правило цены. Движок (src/pricing/price-engine.ts) собирает все подходящие
+// под листинг включённые правила и применяет ОДНО — с наибольшим priority (при
+// равенстве — дающее меньшую цену). Не подошло ни одно — базовая наценка
+// PlatformSettings.markupBps. Цена никогда не опускается ниже себестоимости.
+//
+// Область: все четыре FK null = правило на всю витрину; заполненные сужают её
+// (условия складываются через И). Условия: окно дат и диапазон остатка, null = без ограничения.
+model PriceRule {
+  id       String          @id @default(cuid())
+  name     String
+  enabled  Boolean         @default(true)
+  priority Int
+  action   PriceRuleAction
+  // Базисные пункты для *_PERCENT, тийины для FIXED_PRICE.
+  value    Int
+
+  sellerId      String?
+  seller        Seller?      @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  categoryId    String?
+  category      Category?    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  catalogItemId String?
+  catalogItem   CatalogItem? @relation(fields: [catalogItemId], references: [id], onDelete: Cascade)
+  listingId     String?
+  listing       Listing?     @relation("PriceRuleListing", fields: [listingId], references: [id], onDelete: Cascade)
+
+  startsAt DateTime?
+  endsAt   DateTime?
+  minStock Int?
+  maxStock Int?
+
+  appliedTo Listing[] @relation("AppliedPriceRule")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled])
+  @@map("price_rules")
 }
 
 // Позиция в корзине покупателя. Отдельной обёртки Cart нет — у пользователя
@@ -605,7 +673,7 @@ model OrderGroup {
 // нет по той же причине, что нет обёртки Cart над CartItem — сущность без собственных
 // полей не нужна, а общие данные чекаута теперь и так живут в OrderGroup.
 //
-// Свои деньги — только itemsTotal (доля продавца), снапшот на момент оформления: цена
+// Свои деньги — itemsTotal (розница) и costTotal (выплата продавцу), снапшот на момент оформления: цена
 // листинга меняется, а заказ обязан остаться читаемым как есть. Доставка на Order не
 // раскладывается — она платформенная и живёт целиком в OrderGroup.deliveryFee/total.
 model Order {
@@ -624,8 +692,10 @@ model Order {
   status OrderStatus @default(NEW)
 
   // Доставка — платформенная, считается один раз на чекаут (OrderGroup.deliveryFee/total).
-  // Доля продавца — только itemsTotal, разложения доставки на заказ нет намеренно.
+  // itemsTotal — розничная сумма позиций этого продавца (платит покупатель),
+  // costTotal — сумма по себестоимости, то есть выплата продавцу. Разница — маржа платформы.
   itemsTotal Int
+  costTotal  Int
 
   // Задел под курьерскую систему: позже заменяется на courierId → модель Courier.
   courierName  String?
@@ -666,9 +736,14 @@ model OrderItem {
   /// Снапшот единицы измерения по локалям, той же формы, что catalogItemName.
   unit                Json
 
-  price    Int
-  quantity Int
-  total    Int
+  price     Int // розница на момент оформления
+  quantity  Int
+  total     Int
+  costPrice Int // себестоимость на момент оформления — выплата продавцу
+  costTotal Int
+  /// Почему цена такая: { markupBps, appliedRuleId, ruleName }. null у заказов до
+  /// появления ценообразования.
+  pricing   Json?
 
   createdAt DateTime @default(now())
 

@@ -8,6 +8,7 @@ import { MetricsModule } from '../metrics/metrics.module';
 import { OrdersModule } from '../orders/orders.module';
 import { SellersModule } from '../sellers/sellers.module';
 import { SettingsModule } from '../settings/settings.module';
+import { PricingModule } from '../pricing/pricing.module';
 import { AppVersionModule } from '../app-version/app-version.module';
 import { StorageModule } from '../storage/storage.module';
 import { TelegramModule } from '../telegram/telegram.module';
@@ -40,6 +41,7 @@ import { AdminCustomersController } from './admin-customers.controller';
     OrdersModule,
     SellersModule,
     SettingsModule,
+    PricingModule,
     AppVersionModule,
     StorageModule,
     TelegramModule,

@@ -21,7 +21,10 @@ export interface OrdersMetricsByStatus {
 
 export interface OrdersMetrics {
   orderCount: number;
+  /** Розничная сумма товаров (без доставки), без CANCELLED. */
   revenue: number;
+  /** revenue − выплаты продавцам (costTotal): заработок платформы на наценке. */
+  margin: number;
   averageOrderValue: number;
   byStatus: OrdersMetricsByStatus[];
 }
@@ -39,11 +42,13 @@ export interface OverviewMetrics {
     newUsers: number;
     orderCount: number;
     revenue: number;
+    margin: number;
   };
   allTime: {
     totalUsers: number;
     totalOrders: number;
     totalRevenue: number;
+    totalMargin: number;
     activeSellers: number;
     pendingCategories: number;
     pendingCatalogItems: number;
@@ -71,7 +76,7 @@ export class MetricsService {
       this.prisma.order.aggregate({
         where: { createdAt, status: { not: OrderStatus.CANCELLED } },
         _count: true,
-        _sum: { itemsTotal: true },
+        _sum: { itemsTotal: true, costTotal: true },
       }),
       this.prisma.order.groupBy({
         by: ['status'],
@@ -87,6 +92,7 @@ export class MetricsService {
     return {
       orderCount,
       revenue,
+      margin: revenue - (aggregate._sum.costTotal ?? 0),
       averageOrderValue: orderCount > 0 ? Math.round(revenue / orderCount) : 0,
       byStatus: groups.map((g) => ({
         status: g.status,
@@ -134,7 +140,7 @@ export class MetricsService {
         this.prisma.order.aggregate({
           where: { status: { not: OrderStatus.CANCELLED } },
           _count: true,
-          _sum: { itemsTotal: true },
+          _sum: { itemsTotal: true, costTotal: true },
         }),
         this.getCatalog(),
       ]);
@@ -144,11 +150,14 @@ export class MetricsService {
         newUsers: todayUsers.newInPeriod,
         orderCount: todayOrders.orderCount,
         revenue: todayOrders.revenue,
+        margin: todayOrders.margin,
       },
       allTime: {
         totalUsers,
         totalOrders: allOrders._count,
         totalRevenue: allOrders._sum.itemsTotal ?? 0,
+        totalMargin:
+          (allOrders._sum.itemsTotal ?? 0) - (allOrders._sum.costTotal ?? 0),
         activeSellers: catalog.activeSellers,
         pendingCategories: catalog.pendingCategories,
         pendingCatalogItems: catalog.pendingCatalogItems,

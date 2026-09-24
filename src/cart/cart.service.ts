@@ -40,10 +40,23 @@ type CartItemWithListing = Prisma.CartItemGetPayload<{
   include: typeof withListing;
 }>;
 
+// Поля листинга перечислены явно, а не спредом Prisma-строки: в ней лежат
+// costPrice/appliedRuleId, а себестоимость покупателю показывать нельзя. Новая
+// колонка Listing в корзину тоже не утечёт, пока её не добавят сюда осознанно.
+type CartListingResponse = Pick<
+  CartItemWithListing['listing'],
+  | 'id'
+  | 'sellerId'
+  | 'catalogItemId'
+  | 'price'
+  | 'stock'
+  | 'status'
+  | 'createdAt'
+  | 'updatedAt'
+> & { catalogItem: CatalogItemResponse };
+
 export interface CartItemResponse extends Omit<CartItemWithListing, 'listing'> {
-  listing: Omit<CartItemWithListing['listing'], 'catalogItem'> & {
-    catalogItem: CatalogItemResponse;
-  };
+  listing: CartListingResponse;
 }
 
 export interface CartResponse {
@@ -167,13 +180,20 @@ export class CartService {
     const quote = await this.settings.quote(itemsTotal, { allFreeDelivery });
     return {
       // catalogItem.media хранит ключи S3-объектов — здесь собираем полные URL.
-      items: items.map((i) => ({
+      items: items.map(({ listing, ...i }) => ({
         ...i,
         listing: {
-          ...i.listing,
+          id: listing.id,
+          sellerId: listing.sellerId,
+          catalogItemId: listing.catalogItemId,
+          price: listing.price,
+          stock: listing.stock,
+          status: listing.status,
+          createdAt: listing.createdAt,
+          updatedAt: listing.updatedAt,
           catalogItem: withMediaUrls(
             this.storage,
-            toCatalogItemResponse(i.listing.catalogItem, locale),
+            toCatalogItemResponse(listing.catalogItem, locale),
           ),
         },
       })),

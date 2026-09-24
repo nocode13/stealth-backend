@@ -5,28 +5,37 @@ import { AuthenticatedGuard } from '../auth/guards/authenticated.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { SettingsService } from '../settings/settings.service';
+import { PricingService } from '../pricing/pricing.service';
 import { UpdatePlatformSettingsDto } from '../settings/dto/settings.dto';
 
-// Платформенный тариф доставки — правит только SUPER_ADMIN, продавцы его не назначают.
+// Платформенный тариф доставки и базовая наценка — правит только SUPER_ADMIN,
+// продавцы их не назначают (и наценку не видят вовсе).
 @ApiTags('admin/settings')
 @ApiCookieAuth()
 @Controller('admin/settings')
 @UseGuards(AuthenticatedGuard, RolesGuard)
 @Roles(Role.SUPER_ADMIN)
 export class AdminSettingsController {
-  constructor(private readonly settings: SettingsService) {}
+  constructor(
+    private readonly settings: SettingsService,
+    private readonly pricing: PricingService,
+  ) {}
 
   @Get()
-  @ApiOperation({ summary: 'Текущие платформенные настройки доставки' })
+  @ApiOperation({
+    summary: 'Текущие платформенные настройки доставки и наценки',
+  })
   get() {
     return this.settings.get();
   }
 
   @Patch()
   @ApiOperation({
-    summary: 'Изменить тариф доставки / порог бесплатной доставки',
+    summary:
+      'Изменить тариф доставки / порог бесплатной доставки / наценку. ' +
+      'Смена наценки или округления пересчитывает цены всей витрины.',
   })
   update(@Body() dto: UpdatePlatformSettingsDto) {
-    return this.settings.update(dto);
+    return this.pricing.updateSettings(dto);
   }
 }

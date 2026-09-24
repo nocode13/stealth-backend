@@ -4,6 +4,7 @@ import { AddressesModule } from '../addresses/addresses.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PushModule } from '../push/push.module';
 import { SettingsModule } from '../settings/settings.module';
+import { PricingModule } from '../pricing/pricing.module';
 import { OrderNotifier } from './order-notifier.service';
 import { OrdersService } from './orders.service';
 
@@ -16,6 +17,8 @@ import { OrdersService } from './orders.service';
 // PushModule — третий канал (нативные пуши), тоже без зависимостей, как
 // TelegramNotifyModule. SettingsModule — тариф доставки для createFromCart
 // (SettingsService.quote), платформенная доставка считается один раз на чекаут.
+// PricingModule — пересчёт розницы после списания/возврата остатка и наценка для
+// снапшота позиции заказа.
 @Module({
   imports: [
     TelegramNotifyModule,
@@ -23,6 +26,7 @@ import { OrdersService } from './orders.service';
     NotificationsModule,
     PushModule,
     SettingsModule,
+    PricingModule,
   ],
   providers: [OrdersService, OrderNotifier],
   exports: [OrdersService, OrderNotifier],

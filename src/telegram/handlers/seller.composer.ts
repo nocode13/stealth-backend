@@ -161,7 +161,8 @@ export class SellerComposer {
         id: true,
         orderNumber: true,
         status: true,
-        itemsTotal: true,
+        // Кабинет продавца — суммы по себестоимости (к выплате), не розница.
+        costTotal: true,
         group: { select: { contactName: true } },
       },
     });
@@ -178,7 +179,7 @@ export class SellerComposer {
       keyboard
         .text(
           `#${order.orderNumber} · ${ORDER_STATUS_LABELS[order.status]} · ${(
-            order.itemsTotal / 100
+            order.costTotal / 100
           ).toLocaleString('ru-RU')}`,
           `sel:show:${order.id}`,
         )

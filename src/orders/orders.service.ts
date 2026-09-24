@@ -21,6 +21,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AddressesService } from '../addresses/addresses.service';
 import { CacheService } from '../cache/cache.service';
 import { SettingsService } from '../settings/settings.service';
+import { PricingService } from '../pricing/pricing.service';
 import { err } from '../i18n/api-error';
 import { DEFAULT_LOCALE } from '../i18n/locale';
 import { toLocalizedText } from '../i18n/localized-text';
@@ -103,6 +104,7 @@ export class OrdersService {
     private readonly addresses: AddressesService,
     private readonly cache: CacheService,
     private readonly settings: SettingsService,
+    private readonly pricing: PricingService,
   ) {}
 
   // ─────────────────────────────── создание ───────────────────────────────
@@ -122,6 +124,8 @@ export class OrdersService {
       include: {
         listing: {
           include: {
+            // Имя сработавшего правила цены — в снапшот позиции (OrderItem.pricing).
+            appliedRule: { select: { name: true } },
             catalogItem: {
               // Вся готовая галерея, а не take: 1 — в снапшот заказа нужна
               // картинка, а первым медиа может оказаться видео (см. coverUrl).
@@ -189,6 +193,9 @@ export class OrdersService {
         (item) => item.listing.catalogItem.freeDelivery,
       ),
     });
+    // Базовая наценка на момент оформления — только для снапшота «почему цена такая»:
+    // сама розница уже лежит в listing.price (её пишет PricingService).
+    const { markupBps } = await this.pricing.config();
 
     const group = await this.prisma.$transaction(async (tx) => {
       const group = await tx.orderGroup.create({
@@ -233,6 +240,10 @@ export class OrdersService {
           (sum, item) => sum + item.listing.price * item.quantity,
           0,
         );
+        const costTotal = items.reduce(
+          (sum, item) => sum + item.listing.costPrice * item.quantity,
+          0,
+        );
 
         await tx.order.create({
           data: {
@@ -240,6 +251,7 @@ export class OrdersService {
             userId,
             sellerId,
             itemsTotal,
+            costTotal,
             items: {
               create: items.map((item) => ({
                 listingId: item.listingId,
@@ -255,6 +267,13 @@ export class OrdersService {
                 price: item.listing.price,
                 quantity: item.quantity,
                 total: item.listing.price * item.quantity,
+                costPrice: item.listing.costPrice,
+                costTotal: item.listing.costPrice * item.quantity,
+                pricing: {
+                  markupBps,
+                  appliedRuleId: item.listing.appliedRuleId,
+                  ruleName: item.listing.appliedRule?.name ?? null,
+                },
               })),
             },
             history: { create: { status: OrderStatus.NEW } },
@@ -278,6 +297,13 @@ export class OrdersService {
       }
 
       await tx.cartItem.deleteMany({ where: { userId } });
+
+      // Остаток изменился — цена могла зависеть от него (правила по остатку).
+      // В той же транзакции: витрина не должна увидеть новый остаток со старой ценой.
+      await this.pricing.recalculate(
+        { id: { in: cartItems.map((item) => item.listingId) } },
+        tx,
+      );
 
       return tx.orderGroup.findUniqueOrThrow({
         where: { id: group.id },
@@ -693,12 +719,18 @@ export class OrdersService {
     tx: Prisma.TransactionClient,
     order: OrderWithDetails,
   ): Promise<void> {
+    const listingIds: string[] = [];
     for (const item of order.items) {
       if (!item.listingId) continue;
       await tx.listing.update({
         where: { id: item.listingId },
         data: { stock: { increment: item.quantity } },
       });
+      listingIds.push(item.listingId);
+    }
+    // Как и при списании в createFromCart: цена может зависеть от остатка.
+    if (listingIds.length > 0) {
+      await this.pricing.recalculate({ id: { in: listingIds } }, tx);
     }
   }
 

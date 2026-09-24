@@ -60,6 +60,7 @@ src/
   auth/                    # стратегии и guard'ы: JWT / session / local; email-auth.service.ts — вход по коду на почту
   users/ sellers/ categories/ catalog/ listings/ cart/ addresses/ settings/
   app-version/             # версии в сторах для плашки «обновитесь» в мобилке
+  pricing/                 # движок цены (price-engine.ts) + PricingService.recalculate
   orders/                  # OrdersService, order-status.ts, order-notifier.service.ts
   notifications/ metrics/  # in-app лента · агрегаты для дашборда админки
   storage/                 # StorageService (S3) + ImageService (sharp → webp)
@@ -109,9 +110,13 @@ src/
   выбирает из готового списка, заводит и правит список только `SUPER_ADMIN`. `CatalogItem`:
   `countryId?` (nullable, `Restrict`), симметрично `categoryId`. Название живёт в
   `CountryTranslation`, тот же инвариант, что у `CategoryTranslation`.
-- **Listing** — предложение продавца поверх позиции: `price`, `stock`, `status`
-  (`DRAFT|ACTIVE|ARCHIVED`), `@@unique([sellerId, catalogItemId])`. При создании
-  `CatalogService.assertUsable` проверяет, что позиция одобрена и видна этому продавцу.
+- **Listing** — предложение продавца поверх позиции: `costPrice` (себестоимость, вводит
+  продавец), `price` (розница, **денормализованный результат движка**, руками не пишется —
+  см. «Ценообразование»), `appliedRuleId?`, `stock`, `status` (`DRAFT|ACTIVE|ARCHIVED`),
+  `@@unique([sellerId, catalogItemId])`. При создании `CatalogService.assertUsable`
+  проверяет, что позиция одобрена и видна этому продавцу.
+- **PriceRule** — правило цены (область, приоритет, действие, окно дат, диапазон остатка),
+  см. «Ценообразование». CRUD пока нет — таблица заполняется руками.
 - **PlatformSettings** — синглтон-строка (`id = "default"`), правит `SUPER_ADMIN` из
   `admin/settings`: `deliveryFee` (тариф за чекаут) и `freeDeliveryThreshold?` (порог
   бесплатной доставки, `null` = порога нет). `SettingsService.quote()` — единственное
@@ -146,8 +151,9 @@ src/
 **Доставка платформенная, не продавцовая.** `OrderGroup.itemsTotal/deliveryFee/total` — итог
 по всему чекауту, тариф считается один раз через `SettingsService.quote()` и **снапшотится**
 в группу на момент оформления (смена тарифа не трогает уже созданные заказы). `Order` несёт
-только `itemsTotal` — долю конкретного продавца, на ней держатся метрики выручки и карточка
-в боте; доставка на заказ не раскладывается и колонок `deliveryFee`/`total` у него нет.
+`itemsTotal` (розница его позиций, на ней держится выручка в метриках) и `costTotal`
+(выплата продавцу — её видит продавец в админке и в боте, разница — маржа платформы);
+доставка на заказ не раскладывается и колонок `deliveryFee`/`total` у него нет.
 
 **Статус группы выводится, не выставляется.** `OrderGroupStatus` повторяет `OrderStatus` плюс
 `PARTIALLY_DELIVERED` (часть продавцов уже довезла, часть нет — возможно только у группы).
@@ -251,7 +257,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | `admin/sellers` | SUPER_ADMIN | CRUD + `POST /:id/image` (баннер) |
 | `admin/sellers/:sellerId/staff` | SUPER_ADMIN, **владелец** | `GET /`, `POST /`, `PATCH /:staffId`, `DELETE /:staffId`, `POST /:staffId/telegram/invite`, `POST /:staffId/telegram/unlink` |
 | `admin/metrics` | SUPER_ADMIN | `GET users`, `GET orders`, `GET catalog`, `GET overview` |
-| `admin/settings` | SUPER_ADMIN | `GET /`, `PATCH /` — тариф доставки/порог бесплатной доставки |
+| `admin/settings` | SUPER_ADMIN | `GET /`, `PATCH /` — тариф доставки/порог бесплатной доставки, базовая наценка `markupBps` и шаг округления `priceRoundingStep` (их смена пересчитывает цены всей витрины) |
 | `admin/app-versions` | SUPER_ADMIN | `GET /`, `PATCH /:platform` — версии приложения в сторах |
 | `admin/broadcasts` | SUPER_ADMIN | `GET /`, `GET /:id`, `POST /audience-count`, `POST /` — ручные рассылки покупателям (см. «Уведомления → Рассылки») |
 | `admin/customers` | SUPER_ADMIN | `GET /?search` — живые покупатели, выбор получателей рассылки |
@@ -339,7 +345,8 @@ NEW → CONFIRMED → ASSEMBLING → DELIVERING → ARRIVED → DELIVERED
 **Деньги.** Доставка платформенная и считается **один раз на весь чекаут** —
 `SettingsService.quote(itemsTotal, { allFreeDelivery })` (`src/settings/settings.service.ts`,
 единственное место с формулой доставки), результат снапшотится в `OrderGroup.deliveryFee/total`
-при оформлении. `Order.itemsTotal` — доля конкретного продавца, без доставки. Бесплатно, если
+при оформлении. `Order.itemsTotal` — розница позиций продавца, `Order.costTotal` — выплата
+ему, обе без доставки. Бесплатно, если
 сумма товаров достигла `PlatformSettings.freeDeliveryThreshold` **или** вся корзина состоит из
 позиций с `CatalogItem.freeDelivery` (смешанная корзина — платная, иначе один дешёвый
 «бесплатный» товар открывал бы бесплатную доставку на всё). Оплата только `CASH`, поэтому
@@ -348,6 +355,49 @@ Payme/Click — добавлением значений в енам; `providerTx
 провайдера на заказ бывает несколько попыток, это будущая модель `Payment`.
 
 **После коммита**, в этом порядке: `cache.bump()` → бэкфилл телефона/имени → уведомление продавцу.
+
+## Ценообразование
+
+**Две цены.** `Listing.costPrice` — себестоимость, её вводит продавец (столько платформа должна
+ему). `Listing.price` — розница, её платит покупатель. Мобилка видит **только `price`**, как и
+раньше; `costPrice` не уходит в мобилку никогда (мобильные мапперы перечисляют поля явно,
+корзина — тоже, без спреда Prisma-строки). В админке `SELLER` видит только себестоимость
+(`toAdminListingResponse`, `toSellerOrderGroupResponse` подставляет её вместо розницы в те же
+поля), `SUPER_ADMIN` — обе цены, сработавшее правило и маржу (`toAdminOrderGroupResponse`).
+
+**`price` денормализована: считается при записи, а не при чтении.** Иначе сломались бы
+сортировка/фильтр/курсор по цене в SQL и индекс `(status, price)`. Писать её может
+**только** `PricingService.recalculate(where, tx?)` (`src/pricing/pricing.service.ts`): грузит
+листинги кусками, прогоняет движок и обновляет лишь изменившиеся строки. `cache.bump()` —
+на вызывающем, после коммита. Триггеры:
+
+- `ListingsService.create/update` — в той же транзакции, что и запись `costPrice`/`stock`;
+- `PATCH /admin/settings` с `markupBps`/`priceRoundingStep` — вся витрина
+  (`PricingService.updateSettings`; живёт в pricing, т.к. `SettingsModule` о ценообразовании
+  не знает — иначе цикл модулей);
+- чекаут (списание остатка) и отмена (`restock`) — затронутые листинги, в той же транзакции.
+
+⚠️ Любой новый код, меняющий вход движка (`costPrice`, `stock`, категорию позиции, правила,
+настройки), обязан звать `recalculate` — иначе витрина покажет цену, не соответствующую
+правилам.
+
+**Движок — чистая функция** `resolvePrice` (`src/pricing/price-engine.ts`), без I/O. Кандидат
+по умолчанию — базовая наценка `PlatformSettings.markupBps` (bps, 2000 = 20%). Из подходящих
+включённых `PriceRule` (область — `sellerId`/`categoryId`/`catalogItemId`/`listingId`, `null` =
+везде, условия — `startsAt`/`endsAt`/`minStock`/`maxStock`) применяется **одно**, с
+наибольшим `priority`, при равенстве — дающее меньшую цену. Итог округляется вверх до
+`priceRoundingStep` и **никогда не опускается ниже `costPrice`**. Арифметика целочисленная
+(тийины и bps). Новый тип правила = значение `PriceRuleAction` + ветка в `applyAction`.
+
+**Снапшот в заказ.** `OrderItem` хранит `price`/`total` (розница), `costPrice`/`costTotal` и
+`pricing: { markupBps, appliedRuleId, ruleName }`; `Order.costTotal` — выплата продавцу.
+Заказы до миграции `20260924120000_pricing` получили `costPrice = price` (старая цена и была
+себестоимостью), маржи у них нет.
+
+**Следующая итерация (ещё нет):** CRUD `admin/price-rules` с пересчётом по области правила и
+тикер раз в минуту для правил с датами — пересчёт листингов тех правил, чей
+`startsAt`/`endsAt` попал в `(lastTick, now]`. Пока тикера нет, правило с датами применится
+только при следующем пересчёте затронутого листинга.
 
 ## Уведомления
 
@@ -779,6 +829,10 @@ Buckets приватные и публичных URL не дают, а ссыл�
   владельцу; заблокировавший бота сотрудник не мешает доставке остальным; сотрудник без
   привязки просто пропускается; рядовой сотрудник получает 403 на `…/staff`, владелец чужого
   продавца — тоже; владельца удалить нельзя (400).
+- ценообразование: листинг с `costPrice` 1 000 000 при наценке 20% → `price` 1 200 000; ни в
+  одном ответе `/mobile/*` (листинги, корзина, избранное, заказы) нет `costPrice`; `SELLER` в
+  `/admin/listings` и `/admin/orders` не видит розницы; смена `markupBps` в настройках сразу
+  пересчитывает витрину; `PriceRule` со скидкой больше наценки не опускает цену ниже `costPrice`.
 - описания: `PATCH /admin/catalog/:id` (и `/admin/sellers/:id`) с RU-описанием
   `<p>ok</p><script>x</script><img src=x><a href="//e">link</a><h1>T</h1>` сохраняет
   `<p>ok</p>link<h2>T</h2>`; `<p></p>` сохраняется как `null`, а UZ/EN без описания получают
