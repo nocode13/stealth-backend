@@ -62,9 +62,7 @@ export class AuthService {
     telegramId: string;
     name?: string | null;
   }): Promise<TokenPair> {
-    const user =
-      (await this.users.findByTelegramId(tg.telegramId)) ??
-      (await this.users.createFromTelegram(tg));
+    const user = await this.users.findOrCreateByTelegram(tg);
     return this.issueTokens(user.id);
   }
 

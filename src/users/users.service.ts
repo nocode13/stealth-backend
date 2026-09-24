@@ -73,19 +73,36 @@ export class UsersService {
     });
   }
 
-  // Регистрация мобилки: всё, что мы знаем о новом юзере, — его telegramId
+  // Вход/регистрация мобилки: всё, что мы знаем о новом юзере, — его telegramId
   // и имя из Telegram. Телефон/email он заполнит сам в профиле.
-  createFromTelegram(data: {
+  //
+  // ⚠️ Первый вход приходит параллельно (Mini App шлёт initData дважды, /start
+  // жмут повторно): оба запроса не находят юзера и оба делают create — второй
+  // падал 500-й на P2002. Проигравший гонку перечитывает строку победителя.
+  async findOrCreateByTelegram(data: {
     telegramId: string;
     name?: string | null;
   }): Promise<User> {
-    return this.prisma.user.create({
-      data: {
-        telegramId: data.telegramId,
-        name: data.name ?? null,
-        role: Role.CUSTOMER,
-      },
-    });
+    const existing = await this.findByTelegramId(data.telegramId);
+    if (existing) return existing;
+    try {
+      return await this.prisma.user.create({
+        data: {
+          telegramId: data.telegramId,
+          name: data.name ?? null,
+          role: Role.CUSTOMER,
+        },
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        const winner = await this.findByTelegramId(data.telegramId);
+        if (winner) return winner;
+      }
+      throw e;
+    }
   }
 
   // Регистрация по коду на почту: адрес уже подтверждён (код только что пришёл
