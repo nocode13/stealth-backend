@@ -29,6 +29,7 @@ const withListing = {
         },
       },
       seller: { select: { id: true, translations: true } },
+      promotion: { include: { translations: true } },
     },
   },
 } satisfies Prisma.FavoriteInclude;

@@ -15,6 +15,10 @@ import {
   CatalogItemResponse,
   toCatalogItemResponse,
 } from '../catalog/catalog.response';
+import {
+  ListingPromotionResponse,
+  toListingPromotionResponse,
+} from '../promotions/promotion.response';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 
 const withListing = {
@@ -32,6 +36,7 @@ const withListing = {
           },
         },
       },
+      promotion: { include: { translations: true } },
     },
   },
 } satisfies Prisma.CartItemInclude;
@@ -40,15 +45,34 @@ type CartItemWithListing = Prisma.CartItemGetPayload<{
   include: typeof withListing;
 }>;
 
+// Поля листинга перечислены явно, а не спредом Prisma-строки: в ней лежат
+// costPrice/appliedRuleId, а себестоимость покупателю показывать нельзя. Новая
+// колонка Listing в корзину тоже не утечёт, пока её не добавят сюда осознанно.
+type CartListingResponse = Pick<
+  CartItemWithListing['listing'],
+  | 'id'
+  | 'sellerId'
+  | 'catalogItemId'
+  | 'price'
+  | 'stock'
+  | 'status'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'oldPrice'
+> & {
+  catalogItem: CatalogItemResponse;
+  promotion: ListingPromotionResponse | null;
+};
+
 export interface CartItemResponse extends Omit<CartItemWithListing, 'listing'> {
-  listing: Omit<CartItemWithListing['listing'], 'catalogItem'> & {
-    catalogItem: CatalogItemResponse;
-  };
+  listing: CartListingResponse;
 }
 
 export interface CartResponse {
   items: CartItemResponse[];
   itemCount: number;
+  /** Σ (oldPrice − price) × quantity по позициям на акции; 0 — акций в корзине нет. */
+  savings: number;
   itemsTotal: number;
   deliveryFee: number;
   /** itemsTotal + deliveryFee — то, что заплатит покупатель. */
@@ -160,6 +184,14 @@ export class CartService {
       (sum, item) => sum + item.listing.price * item.quantity,
       0,
     );
+    // Экономия по акциям: сколько покупатель не доплатил против обычной цены.
+    const savings = items.reduce(
+      (sum, item) =>
+        item.listing.promotion && item.listing.oldPrice !== null
+          ? sum + (item.listing.oldPrice - item.listing.price) * item.quantity
+          : sum,
+      0,
+    );
     // Пустая корзина — не «бесплатная»: without items every() был бы vacuously true.
     const allFreeDelivery =
       items.length > 0 &&
@@ -167,17 +199,29 @@ export class CartService {
     const quote = await this.settings.quote(itemsTotal, { allFreeDelivery });
     return {
       // catalogItem.media хранит ключи S3-объектов — здесь собираем полные URL.
-      items: items.map((i) => ({
+      items: items.map(({ listing, ...i }) => ({
         ...i,
         listing: {
-          ...i.listing,
+          id: listing.id,
+          sellerId: listing.sellerId,
+          catalogItemId: listing.catalogItemId,
+          price: listing.price,
+          oldPrice: listing.promotion ? listing.oldPrice : null,
+          promotion: listing.promotion
+            ? toListingPromotionResponse(listing.promotion, locale)
+            : null,
+          stock: listing.stock,
+          status: listing.status,
+          createdAt: listing.createdAt,
+          updatedAt: listing.updatedAt,
           catalogItem: withMediaUrls(
             this.storage,
-            toCatalogItemResponse(i.listing.catalogItem, locale),
+            toCatalogItemResponse(listing.catalogItem, locale),
           ),
         },
       })),
       itemCount,
+      savings,
       itemsTotal: quote.itemsTotal,
       deliveryFee: quote.deliveryFee,
       total: quote.total,

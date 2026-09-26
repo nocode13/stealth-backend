@@ -33,13 +33,16 @@ export class CreateListingDto {
   @IsString()
   catalogItemId: string;
 
+  // Розницу (price) руками не задаёт никто — её считает PricingService поверх
+  // себестоимости, поэтому в DTO её нет.
   @ApiProperty({
-    description: 'Цена в тиинах (1 сум = 100 тиинов)',
+    description:
+      'Себестоимость в тиинах (1 сум = 100 тиинов) — столько платформа должна продавцу',
     example: 2500000,
   })
   @IsInt()
   @Min(0)
-  price: number;
+  costPrice: number;
 
   @ApiProperty({ example: 100 })
   @IsInt()
@@ -89,6 +92,8 @@ export class FindListingsQueryDto extends CursorPaginationDto {
   @IsEnum(ListingStatus)
   status?: ListingStatus;
 
+  // Витрина и SUPER_ADMIN фильтруют по рознице, SELLER — по себестоимости (розницу
+  // он не видит).
   @ApiPropertyOptional({ description: 'В тиинах', example: 1000000 })
   @IsOptional()
   @Type(() => Number)

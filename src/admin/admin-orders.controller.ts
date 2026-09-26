@@ -22,7 +22,7 @@ import {
 } from '../orders/dto/order.dto';
 import {
   OrderGroupResponse,
-  toOrderGroupResponse,
+  toAdminOrderGroupResponse,
   toSellerOrderGroupResponse,
 } from '../orders/order.response';
 import type { OrderGroupWithOrders } from '../orders/orders.service';
@@ -81,7 +81,7 @@ export class AdminOrdersController {
     @Body() dto: ChangeOrderStatusDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return toOrderGroupResponse(
+    return toAdminOrderGroupResponse(
       await this.orders.changeStatus(user, orderId, dto),
       this.storage,
       DEFAULT_LOCALE,
@@ -103,7 +103,7 @@ export class AdminOrdersController {
     @Body() dto: ChangeOrderStatusDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return toOrderGroupResponse(
+    return toAdminOrderGroupResponse(
       await this.orders.changeGroupStatus(user, id, dto),
       this.storage,
       DEFAULT_LOCALE,
@@ -118,7 +118,7 @@ export class AdminOrdersController {
     @Body() dto: UpdateOrderCourierDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return toOrderGroupResponse(
+    return toAdminOrderGroupResponse(
       await this.orders.updateCourier(user, orderId, dto),
       this.storage,
       DEFAULT_LOCALE,
@@ -130,7 +130,7 @@ export class AdminOrdersController {
     group: OrderGroupWithOrders,
   ): OrderGroupResponse {
     return user.role === Role.SUPER_ADMIN
-      ? toOrderGroupResponse(group, this.storage, DEFAULT_LOCALE)
+      ? toAdminOrderGroupResponse(group, this.storage, DEFAULT_LOCALE)
       : toSellerOrderGroupResponse(group, this.storage, DEFAULT_LOCALE);
   }
 }

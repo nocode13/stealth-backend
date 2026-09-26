@@ -8,10 +8,12 @@ import { MetricsModule } from '../metrics/metrics.module';
 import { OrdersModule } from '../orders/orders.module';
 import { SellersModule } from '../sellers/sellers.module';
 import { SettingsModule } from '../settings/settings.module';
+import { PricingModule } from '../pricing/pricing.module';
 import { AppVersionModule } from '../app-version/app-version.module';
 import { StorageModule } from '../storage/storage.module';
 import { TelegramModule } from '../telegram/telegram.module';
 import { BroadcastsModule } from '../broadcasts/broadcasts.module';
+import { PromotionsModule } from '../promotions/promotions.module';
 import { UsersModule } from '../users/users.module';
 import { AdminAuthController } from './admin-auth.controller';
 import { AdminCategoriesController } from './admin-categories.controller';
@@ -26,6 +28,8 @@ import { AdminSettingsController } from './admin-settings.controller';
 import { AdminAppVersionsController } from './admin-app-versions.controller';
 import { AdminBroadcastsController } from './admin-broadcasts.controller';
 import { AdminCustomersController } from './admin-customers.controller';
+import { AdminPromotionsController } from './admin-promotions.controller';
+import { AdminPriceRulesController } from './admin-price-rules.controller';
 
 // API-поверхность админки. Логика — в доменных модулях, тут только контроллеры
 // с session-guard'ами и Swagger-тегами.
@@ -40,11 +44,13 @@ import { AdminCustomersController } from './admin-customers.controller';
     OrdersModule,
     SellersModule,
     SettingsModule,
+    PricingModule,
     AppVersionModule,
     StorageModule,
     TelegramModule,
     BroadcastsModule,
     UsersModule,
+    PromotionsModule,
   ],
   controllers: [
     AdminAuthController,
@@ -60,6 +66,8 @@ import { AdminCustomersController } from './admin-customers.controller';
     AdminAppVersionsController,
     AdminBroadcastsController,
     AdminCustomersController,
+    AdminPromotionsController,
+    AdminPriceRulesController,
   ],
 })
 export class AdminModule {}

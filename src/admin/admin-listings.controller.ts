@@ -25,7 +25,8 @@ import {
   UpdateListingDto,
 } from '../listings/dto/listing.dto';
 
-// Управление листингами продавца. Продавец работает только со своими.
+// Управление листингами продавца. Продавец работает только со своими и видит только
+// себестоимость — розница и наценка в ответе есть лишь у SUPER_ADMIN.
 @ApiTags('admin/listings')
 @ApiCookieAuth()
 @Controller('admin/listings')
@@ -58,12 +59,12 @@ export class AdminListingsController {
       user.role === Role.SUPER_ADMIN
         ? (query.sellerId ?? null)
         : this.sellerId(user);
-    return this.listings.findForSeller(sellerId, query);
+    return this.listings.findForSeller(sellerId, query, user.role);
   }
 
   @Get(':id')
   findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.listings.findOneForSeller(id, this.scope(user));
+    return this.listings.findOneForSeller(id, this.scope(user), user.role);
   }
 
   @Post()
@@ -74,9 +75,9 @@ export class AdminListingsController {
   create(@Body() dto: CreateListingDto, @CurrentUser() user: AuthUser) {
     if (user.role === Role.SUPER_ADMIN) {
       if (!dto.sellerId) throw new BadRequestException('Не выбран продавец');
-      return this.listings.create(dto.sellerId, dto);
+      return this.listings.create(dto.sellerId, dto, user.role);
     }
-    return this.listings.create(this.sellerId(user), dto);
+    return this.listings.create(this.sellerId(user), dto, user.role);
   }
 
   @Patch(':id')
@@ -85,7 +86,7 @@ export class AdminListingsController {
     @Body() dto: UpdateListingDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.listings.update(id, this.scope(user), dto);
+    return this.listings.update(id, this.scope(user), dto, user.role);
   }
 
   @Delete(':id')

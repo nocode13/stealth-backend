@@ -23,8 +23,9 @@ export interface OrderResponse {
   orderNumber: number;
   status: OrderStatus;
   seller: { id: string; name: string };
-  // Доля этого продавца — доставка на Order не раскладывается, она платформенная
-  // и живёт целиком в OrderGroupResponse.deliveryFee/total.
+  // Сумма товаров этого продавца (розница; у SELLER — себестоимость, см.
+  // toSellerOrderGroupResponse). Доставка на Order не раскладывается, она
+  // платформенная и живёт целиком в OrderGroupResponse.deliveryFee/total.
   itemsTotal: number;
   courierName: string | null;
   courierPhone: string | null;
@@ -145,9 +146,76 @@ export const toOrderGroupResponse = (
   })),
 });
 
+// ── Деньги по себестоимости ──
+// Мобильный ответ (toOrderGroupResponse) несёт только розницу. Админке к ней
+// добавляется себестоимость: SUPER_ADMIN видит обе цены и маржу, SELLER — только
+// себестоимость, подставленную ВМЕСТО розницы в те же поля (его выручка — это
+// выплата от платформы, наценку он не видит). Мапперы ниже накладываются на базовый
+// ответ по индексу: toOrderGroupResponse сохраняет порядок orders и items.
+
+export interface AdminOrderGroupResponse extends OrderGroupResponse {
+  orders: (OrderResponse & {
+    /** Выплата продавцу по этому заказу. */
+    costTotal: number;
+    items: (OrderResponse['items'][number] & {
+      costPrice: number;
+      costTotal: number;
+      /** Акция из снапшота OrderItem.pricing; null — позиция без акции. */
+      promotionTitle: string | null;
+      /** Розница без акции на момент оформления; null — без акции. */
+      oldPrice: number | null;
+    })[];
+  })[];
+  /** Сумма выплат продавцам по группе. */
+  costTotal: number;
+  /** itemsTotal − costTotal: заработок платформы на товарах (без доставки). */
+  margin: number;
+}
+
+// OrderItem.pricing — JSON-снапшот; у заказов до акций полей promotion* в нём нет,
+// до ценообразования нет и самого снапшота.
+const promoFromSnapshot = (
+  pricing: unknown,
+): { promotionTitle: string | null; oldPrice: number | null } => {
+  const p =
+    pricing && typeof pricing === 'object'
+      ? (pricing as Record<string, unknown>)
+      : {};
+  return {
+    promotionTitle:
+      typeof p.promotionTitle === 'string' ? p.promotionTitle : null,
+    oldPrice: typeof p.oldPrice === 'number' ? p.oldPrice : null,
+  };
+};
+
+/** Ответ SUPER_ADMIN: розница + себестоимость и маржа. */
+export const toAdminOrderGroupResponse = (
+  g: OrderGroupWithOrders,
+  storage: StorageService,
+  locale: Locale,
+): AdminOrderGroupResponse => {
+  const base = toOrderGroupResponse(g, storage, locale);
+  const orders = base.orders.map((o, i) => {
+    const src = g.orders[i];
+    return {
+      ...o,
+      costTotal: src.costTotal,
+      items: o.items.map((item, j) => ({
+        ...item,
+        costPrice: src.items[j].costPrice,
+        costTotal: src.items[j].costTotal,
+        ...promoFromSnapshot(src.items[j].pricing),
+      })),
+    };
+  });
+  const costTotal = orders.reduce((sum, o) => sum + o.costTotal, 0);
+  return { ...base, orders, costTotal, margin: base.itemsTotal - costTotal };
+};
+
 /**
  * Ответ продавцу: заказы уже отфильтрованы запросом (только его), поэтому суммы
  * пересчитываются по видимым — иначе SELLER узнал бы оборот соседа по группе.
+ * Все цены — себестоимость (сумма к выплате), розницу и наценку он не видит.
  * Доставка платформенная, к его выручке отношения не имеет, поэтому 0.
  */
 export const toSellerOrderGroupResponse = (
@@ -156,6 +224,18 @@ export const toSellerOrderGroupResponse = (
   locale: Locale,
 ): OrderGroupResponse => {
   const base = toOrderGroupResponse(g, storage, locale);
-  const itemsTotal = base.orders.reduce((sum, o) => sum + o.itemsTotal, 0);
-  return { ...base, itemsTotal, deliveryFee: 0, total: itemsTotal };
+  const orders = base.orders.map((o, i) => {
+    const src = g.orders[i];
+    return {
+      ...o,
+      itemsTotal: src.costTotal,
+      items: o.items.map((item, j) => ({
+        ...item,
+        price: src.items[j].costPrice,
+        total: src.items[j].costTotal,
+      })),
+    };
+  });
+  const itemsTotal = orders.reduce((sum, o) => sum + o.itemsTotal, 0);
+  return { ...base, orders, itemsTotal, deliveryFee: 0, total: itemsTotal };
 };

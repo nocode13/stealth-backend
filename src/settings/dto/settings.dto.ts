@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsInt, IsOptional, Min, ValidateIf } from 'class-validator';
+import { IsInt, IsOptional, Max, Min, ValidateIf } from 'class-validator';
 
 export class UpdatePlatformSettingsDto {
   @ApiPropertyOptional({
@@ -20,4 +20,25 @@ export class UpdatePlatformSettingsDto {
   @IsInt()
   @Min(0)
   freeDeliveryThreshold?: number | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Базовая наценка платформы поверх себестоимости, в базисных пунктах (2000 = 20%)',
+    example: 2000,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100000)
+  markupBps?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Шаг округления розничной цены вверх, в тийинах (100 = до целого сума)',
+    example: 100,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  priceRoundingStep?: number;
 }
