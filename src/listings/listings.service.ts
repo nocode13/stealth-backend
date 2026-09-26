@@ -53,6 +53,8 @@ const withCatalog = {
     },
   },
   seller: { select: { id: true, translations: true } },
+  // Акция, давшая текущую price (название/текст в карточку). Пишет PricingService.
+  promotion: { include: { translations: true } },
 } satisfies Prisma.ListingInclude;
 
 // Админке дополнительно нужно сработавшее правило цены (видит только SUPER_ADMIN).
@@ -74,7 +76,10 @@ function buildPriceFilter(
 }
 
 /**
- * Порядок выдачи. ⚠️ `id` обязан быть последним в каждой ветке: курсорная пагинация
+ * Порядок выдачи. Акционные листинги (`onPromo`) идут первыми в «новых» и
+ * «бесплатной доставке» (дефолт мобилки); сортировки по цене остаются честными —
+ * иначе «сначала дешёвые» показывал бы дорогую акцию выше дешёвого товара.
+ * ⚠️ `id` обязан быть последним в каждой ветке: курсорная пагинация
  * (`cursor: { id }`, `skip: 1`) детерминирована только при orderBy, заканчивающемся на
  * уникальном поле. Без тайбрейкера листинги с одинаковой ценой дублируются и пропадают
  * между страницами. См. контракт в `src/common/pagination.ts`.
@@ -91,13 +96,14 @@ function buildOrderBy(
     // Внутри групп — сначала дешёвые (схлопнуто с price_asc в одну опцию мобилки).
     case ListingSort.FREE_DELIVERY:
       return [
+        { onPromo: 'desc' },
         { catalogItem: { freeDelivery: 'desc' } },
         { price: 'asc' },
         { id: 'asc' },
       ];
     case ListingSort.NEWEST:
     default:
-      return [{ createdAt: 'desc' }, { id: 'desc' }];
+      return [{ onPromo: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }];
   }
 }
 

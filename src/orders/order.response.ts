@@ -160,6 +160,10 @@ export interface AdminOrderGroupResponse extends OrderGroupResponse {
     items: (OrderResponse['items'][number] & {
       costPrice: number;
       costTotal: number;
+      /** Акция из снапшота OrderItem.pricing; null — позиция без акции. */
+      promotionTitle: string | null;
+      /** Розница без акции на момент оформления; null — без акции. */
+      oldPrice: number | null;
     })[];
   })[];
   /** Сумма выплат продавцам по группе. */
@@ -167,6 +171,22 @@ export interface AdminOrderGroupResponse extends OrderGroupResponse {
   /** itemsTotal − costTotal: заработок платформы на товарах (без доставки). */
   margin: number;
 }
+
+// OrderItem.pricing — JSON-снапшот; у заказов до акций полей promotion* в нём нет,
+// до ценообразования нет и самого снапшота.
+const promoFromSnapshot = (
+  pricing: unknown,
+): { promotionTitle: string | null; oldPrice: number | null } => {
+  const p =
+    pricing && typeof pricing === 'object'
+      ? (pricing as Record<string, unknown>)
+      : {};
+  return {
+    promotionTitle:
+      typeof p.promotionTitle === 'string' ? p.promotionTitle : null,
+    oldPrice: typeof p.oldPrice === 'number' ? p.oldPrice : null,
+  };
+};
 
 /** Ответ SUPER_ADMIN: розница + себестоимость и маржа. */
 export const toAdminOrderGroupResponse = (
@@ -184,6 +204,7 @@ export const toAdminOrderGroupResponse = (
         ...item,
         costPrice: src.items[j].costPrice,
         costTotal: src.items[j].costTotal,
+        ...promoFromSnapshot(src.items[j].pricing),
       })),
     };
   });

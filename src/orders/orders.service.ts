@@ -124,8 +124,18 @@ export class OrdersService {
       include: {
         listing: {
           include: {
-            // Имя сработавшего правила цены — в снапшот позиции (OrderItem.pricing).
+            // Имя сработавшего правила цены и акции — в снапшот позиции
+            // (OrderItem.pricing). Название акции — на DEFAULT_LOCALE: снапшот
+            // читает админка, мобилке он не отдаётся.
             appliedRule: { select: { name: true } },
+            promotion: {
+              select: {
+                translations: {
+                  where: { locale: DEFAULT_LOCALE },
+                  select: { title: true },
+                },
+              },
+            },
             catalogItem: {
               // Вся готовая галерея, а не take: 1 — в снапшот заказа нужна
               // картинка, а первым медиа может оказаться видео (см. coverUrl).
@@ -273,6 +283,15 @@ export class OrdersService {
                   markupBps,
                   appliedRuleId: item.listing.appliedRuleId,
                   ruleName: item.listing.appliedRule?.name ?? null,
+                  // Розница без акции и сама акция: скидку оплатила маржа платформы.
+                  oldPrice: item.listing.promotion
+                    ? item.listing.oldPrice
+                    : null,
+                  promotionId: item.listing.promotion
+                    ? item.listing.promotionId
+                    : null,
+                  promotionTitle:
+                    item.listing.promotion?.translations[0]?.title ?? null,
                 },
               })),
             },

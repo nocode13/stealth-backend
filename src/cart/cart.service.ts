@@ -15,6 +15,10 @@ import {
   CatalogItemResponse,
   toCatalogItemResponse,
 } from '../catalog/catalog.response';
+import {
+  ListingPromotionResponse,
+  toListingPromotionResponse,
+} from '../promotions/promotion.response';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 
 const withListing = {
@@ -32,6 +36,7 @@ const withListing = {
           },
         },
       },
+      promotion: { include: { translations: true } },
     },
   },
 } satisfies Prisma.CartItemInclude;
@@ -53,7 +58,11 @@ type CartListingResponse = Pick<
   | 'status'
   | 'createdAt'
   | 'updatedAt'
-> & { catalogItem: CatalogItemResponse };
+  | 'oldPrice'
+> & {
+  catalogItem: CatalogItemResponse;
+  promotion: ListingPromotionResponse | null;
+};
 
 export interface CartItemResponse extends Omit<CartItemWithListing, 'listing'> {
   listing: CartListingResponse;
@@ -62,6 +71,8 @@ export interface CartItemResponse extends Omit<CartItemWithListing, 'listing'> {
 export interface CartResponse {
   items: CartItemResponse[];
   itemCount: number;
+  /** Σ (oldPrice − price) × quantity по позициям на акции; 0 — акций в корзине нет. */
+  savings: number;
   itemsTotal: number;
   deliveryFee: number;
   /** itemsTotal + deliveryFee — то, что заплатит покупатель. */
@@ -173,6 +184,14 @@ export class CartService {
       (sum, item) => sum + item.listing.price * item.quantity,
       0,
     );
+    // Экономия по акциям: сколько покупатель не доплатил против обычной цены.
+    const savings = items.reduce(
+      (sum, item) =>
+        item.listing.promotion && item.listing.oldPrice !== null
+          ? sum + (item.listing.oldPrice - item.listing.price) * item.quantity
+          : sum,
+      0,
+    );
     // Пустая корзина — не «бесплатная»: without items every() был бы vacuously true.
     const allFreeDelivery =
       items.length > 0 &&
@@ -187,6 +206,10 @@ export class CartService {
           sellerId: listing.sellerId,
           catalogItemId: listing.catalogItemId,
           price: listing.price,
+          oldPrice: listing.promotion ? listing.oldPrice : null,
+          promotion: listing.promotion
+            ? toListingPromotionResponse(listing.promotion, locale)
+            : null,
           stock: listing.stock,
           status: listing.status,
           createdAt: listing.createdAt,
@@ -198,6 +221,7 @@ export class CartService {
         },
       })),
       itemCount,
+      savings,
       itemsTotal: quote.itemsTotal,
       deliveryFee: quote.deliveryFee,
       total: quote.total,

@@ -86,3 +86,31 @@ export function normalizeSellerTranslations(
     };
   });
 }
+
+/** Акция: заголовок (обязателен на RU) + необязательное описание, plain text. */
+export function normalizePromotionTranslations(
+  input: { locale: Locale; title?: string; description?: string | null }[],
+): {
+  locale: Locale;
+  title: string;
+  description: string | null;
+  auto: boolean;
+}[] {
+  const byLocale = new Map(input.map((t) => [t.locale, t]));
+  const ru = byLocale.get(DEFAULT_LOCALE);
+  const baseTitle = clean(ru?.title);
+  if (!baseTitle)
+    throw new BadRequestException('Название акции на русском обязательно');
+  const baseDescription = clean(ru?.description);
+
+  return SUPPORTED_LOCALES.map((locale) => {
+    const t = byLocale.get(locale);
+    const title = clean(t?.title);
+    return {
+      locale,
+      title: title ?? baseTitle,
+      description: clean(t?.description) ?? baseDescription,
+      auto: title === null,
+    };
+  });
+}

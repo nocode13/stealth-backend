@@ -532,6 +532,14 @@ model Listing {
   // Правило, давшее текущую price; null — базовая наценка из PlatformSettings.
   appliedRuleId String?
   appliedRule   PriceRule?    @relation("AppliedPriceRule", fields: [appliedRuleId], references: [id], onDelete: SetNull)
+  // Акция (тоже пишет только PricingService). Инвариант: onPromo ⇔ promotionId != null
+  // ⇔ oldPrice != null. oldPrice — розница без акции (зачёркнутая «было» в мобилке).
+  // onPromo — отдельная NOT NULL колонка ради ORDER BY: сортировка по nullable-полю
+  // ломает курсорную пагинацию Prisma (сравнение с NULL в условии курсора).
+  oldPrice      Int?
+  promotionId   String?
+  promotion     Promotion?    @relation("AppliedPromotion", fields: [promotionId], references: [id], onDelete: SetNull)
+  onPromo       Boolean       @default(false)
   stock         Int           @default(0)
   status        ListingStatus @default(DRAFT)
   createdAt     DateTime      @default(now())
@@ -541,6 +549,7 @@ model Listing {
   favorites  Favorite[]
   orderItems OrderItem[]
   priceRules PriceRule[] @relation("PriceRuleListing")
+  promotionItems PromotionItem[]
 
   @@unique([sellerId, catalogItemId])
   @@index([status])
@@ -548,6 +557,7 @@ model Listing {
   @@index([createdAt])
   @@index([status, price])
   @@index([appliedRuleId])
+  @@index([promotionId])
   @@map("listings")
 }
 
@@ -558,6 +568,7 @@ model Listing {
 //
 // Область: все четыре FK null = правило на всю витрину; заполненные сужают её
 // (условия складываются через И). Условия: окно дат и диапазон остатка, null = без ограничения.
+// Даты — с точностью до дня, как у Promotion: startsAt/endsAt ровно 00:00 по Ташкенту.
 model PriceRule {
   id       String          @id @default(cuid())
   name     String
@@ -588,6 +599,63 @@ model PriceRule {
 
   @@index([enabled])
   @@map("price_rules")
+}
+
+// Акция для покупателя (в отличие от PriceRule — видна в мобилке: зачёркнутая старая
+// цена, плашка «−N%», название и текст). Заводит только SUPER_ADMIN, скидку оплачивает
+// маржа платформы: цена не опускается ниже costPrice, выплата продавцу не меняется.
+// Состав — явный список листингов (PromotionItem), у каждого может быть своя скидка.
+//
+// Даты — с точностью до дня: startsAt/endsAt всегда ровно 00:00 по Ташкенту
+// (src/pricing/business-day.ts), endsAt исключающая — начало дня ПОСЛЕ последнего.
+model Promotion {
+  id           String                 @id @default(cuid())
+  enabled      Boolean                @default(true)
+  // Скидка от обычной розницы в базисных пунктах (2000 = −20%).
+  discountBps  Int
+  startsAt     DateTime?
+  endsAt       DateTime?
+  translations PromotionTranslation[]
+  items        PromotionItem[]
+  appliedTo    Listing[]              @relation("AppliedPromotion")
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  @@index([enabled])
+  @@index([createdAt])
+  @@map("promotions")
+}
+
+// Тот же инвариант, что у CategoryTranslation: строка есть для каждой локали всегда.
+model PromotionTranslation {
+  id          String    @id @default(cuid())
+  promotionId String
+  promotion   Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  locale      Locale
+  title       String
+  description String?
+  /// true — перевод не задан, значение скопировано из RU. Админка рисует поле пустым.
+  auto        Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([promotionId, locale])
+  @@map("promotion_translations")
+}
+
+model PromotionItem {
+  id          String    @id @default(cuid())
+  promotionId String
+  promotion   Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  listingId   String
+  listing     Listing   @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  // Своя скидка этого листинга, bps; null — Promotion.discountBps.
+  discountBps Int?
+  createdAt   DateTime  @default(now())
+
+  @@unique([promotionId, listingId])
+  @@index([listingId])
+  @@map("promotion_items")
 }
 
 // Позиция в корзине покупателя. Отдельной обёртки Cart нет — у пользователя

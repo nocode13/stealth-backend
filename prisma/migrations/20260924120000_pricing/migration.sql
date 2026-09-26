@@ -1,6 +1,7 @@
 -- Ценообразование: себестоимость + денормализованная розница + правила цен.
--- Старый listings.price — то, что вводил продавец, поэтому он становится costPrice,
--- а розница считается поверх него базовой наценкой 20% (округление вверх до сума).
+-- Старый listings.price — то, что видит покупатель, и он НЕ должен измениться: price
+-- остаётся розницей, а costPrice выводится из неё обратно через базовую наценку 20%
+-- так, чтобы движок (costPrice + 20%, округление вверх до сума) вернул ровно прежнюю цену.
 
 -- CreateEnum
 CREATE TYPE "PriceRuleAction" AS ENUM ('MARKUP_PERCENT', 'DISCOUNT_PERCENT', 'FIXED_PRICE');
@@ -10,20 +11,20 @@ ALTER TABLE "platform_settings"
   ADD COLUMN "markupBps" INTEGER NOT NULL DEFAULT 2000,
   ADD COLUMN "priceRoundingStep" INTEGER NOT NULL DEFAULT 100;
 
--- AlterTable: listings. После RENAME индекс (status, price) смотрит на costPrice —
--- пересоздаём его на новой колонке price, по ней сортирует витрина.
-ALTER TABLE "listings" RENAME COLUMN "price" TO "costPrice";
-DROP INDEX "listings_status_price_idx";
+-- AlterTable: listings. price остаётся на месте (розница), индекс (status, price) не
+-- трогаем. costPrice = FLOOR(price / 1.2): для цены P, кратной шагу округления (целые
+-- сумы), ceil(floor(P / 1.2) * 1.2) лежит в (P - 1.2, P], и округление вверх до 100
+-- тийинов даёт ровно P. CEIL здесь увёл бы цену на шаг вверх. bigint — чтобы price * 5
+-- не переполнил INTEGER, целочисленное деление округляет вниз.
 ALTER TABLE "listings"
-  ADD COLUMN "price" INTEGER,
+  ADD COLUMN "costPrice" INTEGER,
   ADD COLUMN "appliedRuleId" TEXT;
-UPDATE "listings" SET "price" = CEIL("costPrice" * 1.2 / 100.0)::INTEGER * 100;
-ALTER TABLE "listings" ALTER COLUMN "price" SET NOT NULL;
-CREATE INDEX "listings_status_price_idx" ON "listings"("status", "price");
+UPDATE "listings" SET "costPrice" = ("price"::BIGINT * 5 / 6)::INTEGER;
+ALTER TABLE "listings" ALTER COLUMN "costPrice" SET NOT NULL;
 CREATE INDEX "listings_appliedRuleId_idx" ON "listings"("appliedRuleId");
 
--- AlterTable: orders / order_items. Старые заказы: цена = себестоимость (так её и
--- вводил продавец), маржи у них нет.
+-- AlterTable: orders / order_items. Старые заказы: себестоимость = розница, маржи у
+-- них нет — выплаты по ним уже прошли по старой цене, историю не переписываем.
 ALTER TABLE "orders" ADD COLUMN "costTotal" INTEGER;
 UPDATE "orders" SET "costTotal" = "itemsTotal";
 ALTER TABLE "orders" ALTER COLUMN "costTotal" SET NOT NULL;
