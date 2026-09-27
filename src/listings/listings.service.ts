@@ -69,6 +69,16 @@ function buildPriceFilter(
   return { gte: minPrice, lte: maxPrice };
 }
 
+// «Новинки»: скользящее окно от текущего момента, не от начала бизнес-дня — для
+// «за последние N дней» Ташкентская полночь не нужна. Внутри cache.wrap окно
+// устаревает максимум на TTL кэша витрины.
+function buildCreatedSinceFilter(
+  days?: number,
+): Prisma.DateTimeFilter | undefined {
+  if (days === undefined) return undefined;
+  return { gte: new Date(Date.now() - days * 24 * 60 * 60 * 1000) };
+}
+
 /**
  * Порядок выдачи. Акционные листинги (`onPromo`) идут первыми в «новых» и
  * «бесплатной доставке» (дефолт мобилки); сортировки по цене остаются честными —
@@ -159,6 +169,7 @@ export class ListingsService {
             stock: { gt: 0 },
             sellerId: query.sellerId,
             price: buildPriceFilter(query.minPrice, query.maxPrice),
+            createdAt: buildCreatedSinceFilter(query.createdWithinDays),
             catalogItem: {
               categoryId: query.categoryId,
               countryId: query.countryId,
@@ -217,6 +228,7 @@ export class ListingsService {
         ...(role === Role.SUPER_ADMIN
           ? { price: priceFilter }
           : { costPrice: priceFilter }),
+        createdAt: buildCreatedSinceFilter(query.createdWithinDays),
         catalogItem: {
           categoryId: query.categoryId,
           countryId: query.countryId,

@@ -284,7 +284,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | Роут | Guard | Эндпоинты |
 |---|---|---|
 | `mobile/auth` | JwtAuthGuard на `me`/`logout`/`email/link/*` | `POST telegram/session`, `GET telegram/session/:nonce`, `POST telegram/miniapp`, `POST email/session`, `POST email/verify`, `POST email/link/session`, `POST email/link/verify`, `POST refresh`, `GET/PATCH me`, `POST logout` |
-| `mobile/listings`, `mobile/categories`, `mobile/countries`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query. `mobile/listings` дополнительно принимает `sort` (`newest`\|`price_asc`\|`price_desc`\|`free_delivery`) — опционален, без него — `createdAt desc`. Без sort, `newest` и `free_delivery` сначала отдают акционные (`onPromo`), ценовые сортировки — нет. `free_delivery` — затем позиции с `CatalogItem.freeDelivery`, внутри групп сначала дешёвые; фильтра по доставке нет намеренно (он прятал половину витрины). `mobile/countries` отдаёт справочник целиком — фильтра видимости у стран нет |
+| `mobile/listings`, `mobile/categories`, `mobile/countries`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query. `mobile/listings` дополнительно принимает `sort` (`newest`\|`price_asc`\|`price_desc`\|`free_delivery`) — опционален, без него — `createdAt desc`. Без sort, `newest` и `free_delivery` сначала отдают акционные (`onPromo`), ценовые сортировки — нет. `free_delivery` — затем позиции с `CatalogItem.freeDelivery`, внутри групп сначала дешёвые; фильтра по доставке нет намеренно (он прятал половину витрины). Опциональный `createdWithinDays` (1..90) — только листинги с `createdAt` за последние N дней, скользящее окно от текущего момента; сортировка при этом обычная. Нужен секции «Новинки недели» (мобилка шлёт `7`); без параметра выдача прежняя — старые сборки его не шлют. Тот же параметр принимает и `admin/listings`. `mobile/countries` отдаёт справочник целиком — фильтра видимости у стран нет |
 | `mobile/catalog` | JwtAuthGuard | `GET /` — ⚠️ асимметрия: остальная витрина публичная |
 | `mobile/cart` | JwtAuthGuard | `GET /`, `POST items`, `PATCH/DELETE items/:id`, `DELETE /` |
 | `mobile/favorites` | JwtAuthGuard | `GET /` — `CursorPage<ListingResponse>`, `GET /ids` — `{ listingIds }`, `PUT /:listingId`, `DELETE /:listingId` |
@@ -891,6 +891,9 @@ Buckets приватные и публичных URL не дают, а ссыл�
   дублей; `price_asc`/`price_desc` — строго по цене; корзина отдаёт `savings`; `SELLER` в
   `/admin/listings` не видит `oldPrice`/`promotion`; акция с `startDate` = завтра включается в
   00:00 по Ташкенту сама (в БД `startsAt` = `…T19:00:00Z` предыдущего дня по UTC).
+- новинки: `GET /mobile/listings` без параметров отдаёт то же, что и раньше;
+  `?createdWithinDays=7` — только `createdAt >= now − 7д`, акционные первыми, курсор без дублей;
+  `createdWithinDays` = `0`/`91`/`abc` → 400; `/admin/listings?createdWithinDays=3` тоже фильтрует.
 - описания: `PATCH /admin/catalog/:id` (и `/admin/sellers/:id`) с RU-описанием
   `<p>ok</p><script>x</script><img src=x><a href="//e">link</a><h1>T</h1>` сохраняет
   `<p>ok</p>link<h2>T</h2>`; `<p></p>` сохраняется как `null`, а UZ/EN без описания получают

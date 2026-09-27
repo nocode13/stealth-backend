@@ -142,4 +142,20 @@ export class FindListingsQueryDto extends CursorPaginationDto {
   @IsOptional()
   @IsEnum(ListingSort)
   sort?: ListingSort;
+
+  // Секция «Новинки недели» в мобилке. Опционален: без него выдача прежняя — уже
+  // выпущенные сборки его не шлют. Число дней, а не дата: ключ кэша витрины стабилен.
+  @ApiPropertyOptional({
+    description:
+      'Только листинги, созданные за последние N дней (скользящее окно от текущего момента)',
+    example: 7,
+    minimum: 1,
+    maximum: 90,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(90)
+  createdWithinDays?: number;
 }
