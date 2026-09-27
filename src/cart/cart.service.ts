@@ -46,7 +46,7 @@ type CartItemWithListing = Prisma.CartItemGetPayload<{
 }>;
 
 // Поля листинга перечислены явно, а не спредом Prisma-строки: в ней лежат
-// costPrice/appliedRuleId, а себестоимость покупателю показывать нельзя. Новая
+// costPrice/customMarkupBps, а себестоимость покупателю показывать нельзя. Новая
 // колонка Listing в корзину тоже не утечёт, пока её не добавят сюда осознанно.
 type CartListingResponse = Pick<
   CartItemWithListing['listing'],

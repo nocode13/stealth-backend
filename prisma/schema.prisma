@@ -137,12 +137,12 @@ enum AppPlatform {
 // Зачем открывали бота по диплинку. Один вариант сегодня (продавец привязывает Telegram),
 // но модель осталась в форме enum+таблица на случай следующего bot-link флоу — раньше тут
 // был ещё DELIVERY_LOCATION (адрес доставки покупателя), выпилен в пользу пикера карты.
-// Что правило цены делает с себестоимостью (см. src/pricing/price-engine.ts).
-// Новый тип правила = новое значение здесь + одна ветка в applyAction.
-enum PriceRuleAction {
-  MARKUP_PERCENT // цена = себестоимость + value bps (своя наценка вместо платформенной)
-  DISCOUNT_PERCENT // цена = розница по базовой наценке − value bps
-  FIXED_PRICE // цена = value тийинов
+// Источник розничной цены листинга (см. src/pricing/price-engine.ts). Порядок, в
+// котором движок их пробует, — PricePriority; срабатывает первый подходящий сверху.
+enum PriceSource {
+  PROMOTION // фиксированная цена по акции (Promotion/PromotionItem.promoPrice)
+  LISTING_MARKUP // своя наценка листинга (Listing.customMarkupBps)
+  BASE_MARKUP // базовая ступенчатая наценка платформы (MarkupTier), фолбэк — всегда последняя
 }
 
 enum BotSessionPurpose {
@@ -288,7 +288,6 @@ model Seller {
   categories   Category[]
   catalogItems CatalogItem[]
   orders       Order[]
-  priceRules   PriceRule[]
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
@@ -325,7 +324,6 @@ model Category {
   seller       Seller?               @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   status       ReviewStatus          @default(APPROVED)
   catalogItems CatalogItem[]
-  priceRules   PriceRule[]
   createdAt    DateTime              @default(now())
   updatedAt    DateTime              @updatedAt
 
@@ -406,7 +404,6 @@ model CatalogItem {
   seller       Seller?                  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   status       ReviewStatus             @default(APPROVED)
   listings     Listing[]
-  priceRules   PriceRule[]
   /// Позиция из вайтлиста бесплатной доставки. Ставит только SUPER_ADMIN: флаг стоит
   /// платформе денег. Корзина едет бесплатно, только если ВСЕ её позиции с этим флагом.
   freeDelivery Boolean                  @default(false)
@@ -450,15 +447,38 @@ model PlatformSettings {
   /// Сумма товаров, с которой доставка бесплатна. null = бесплатной доставки нет.
   freeDeliveryThreshold Int?
 
-  /// Базовая наценка платформы поверх себестоимости, в базисных пунктах (2000 = 20%).
-  /// Действует, когда на листинг не подходит ни одно PriceRule.
-  markupBps         Int @default(2000)
+  /// Базовая наценка платформы живёт в MarkupTier (ступени по себестоимости).
   /// Шаг округления розничной цены вверх, в тийинах (100 = до целого сума).
   priceRoundingStep Int @default(100)
 
   updatedAt DateTime @updatedAt
 
   @@map("platform_settings")
+}
+
+/// Ступень базовой наценки платформы: от minCost (себестоимость за единицу, тийины,
+/// включительно) до minCost следующей ступени. Первая ступень всегда с 0, последняя —
+/// без верхней границы. Правит SUPER_ADMIN из admin/settings, набор заменяется целиком.
+model MarkupTier {
+  id        String   @id @default(cuid())
+  minCost   Int      @unique
+  /// Наценка поверх себестоимости, bps (2000 = 20%).
+  markupBps Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("markup_tiers")
+}
+
+/// Порядок источников цены — ровно три строки (по значению PriceSource), как AppVersion.
+/// Движок пробует источники по возрастанию position, срабатывает первый подходящий.
+/// BASE_MARKUP подходит всегда, поэтому держится последней (проверяет PricingService).
+model PricePriority {
+  source    PriceSource @id
+  position  Int         @unique
+  updatedAt DateTime    @updatedAt
+
+  @@map("price_priorities")
 }
 
 /// Версии мобильного приложения в сторах — ровно две строки (IOS/ANDROID), правит
@@ -529,9 +549,11 @@ model Listing {
   catalogItem   CatalogItem   @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
   costPrice     Int
   price         Int
-  // Правило, давшее текущую price; null — базовая наценка из PlatformSettings.
-  appliedRuleId String?
-  appliedRule   PriceRule?    @relation("AppliedPriceRule", fields: [appliedRuleId], references: [id], onDelete: SetNull)
+  // Своя наценка листинга поверх себестоимости, bps; null — базовая ступенчатая.
+  // Ставит только SUPER_ADMIN, продавец её не видит.
+  customMarkupBps Int?
+  // Какой источник дал текущую price (пишет только PricingService).
+  priceSource   PriceSource   @default(BASE_MARKUP)
   // Акция (тоже пишет только PricingService). Инвариант: onPromo ⇔ promotionId != null
   // ⇔ oldPrice != null. oldPrice — розница без акции (зачёркнутая «было» в мобилке).
   // onPromo — отдельная NOT NULL колонка ради ORDER BY: сортировка по nullable-полю
@@ -548,7 +570,6 @@ model Listing {
   cartItems  CartItem[]
   favorites  Favorite[]
   orderItems OrderItem[]
-  priceRules PriceRule[] @relation("PriceRuleListing")
   promotionItems PromotionItem[]
 
   @@unique([sellerId, catalogItemId])
@@ -556,63 +577,20 @@ model Listing {
   @@index([catalogItemId])
   @@index([createdAt])
   @@index([status, price])
-  @@index([appliedRuleId])
   @@index([promotionId])
   @@map("listings")
 }
 
-// Правило цены. Движок (src/pricing/price-engine.ts) собирает все подходящие
-// под листинг включённые правила и применяет ОДНО — с наибольшим priority (при
-// равенстве — дающее меньшую цену). Не подошло ни одно — базовая наценка
-// PlatformSettings.markupBps. Цена никогда не опускается ниже себестоимости.
-//
-// Область: все четыре FK null = правило на всю витрину; заполненные сужают её
-// (условия складываются через И). Условия: окно дат и диапазон остатка, null = без ограничения.
-// Даты — с точностью до дня, как у Promotion: startsAt/endsAt ровно 00:00 по Ташкенту.
-model PriceRule {
-  id       String          @id @default(cuid())
-  name     String
-  enabled  Boolean         @default(true)
-  priority Int
-  action   PriceRuleAction
-  // Базисные пункты для *_PERCENT, тийины для FIXED_PRICE.
-  value    Int
-
-  sellerId      String?
-  seller        Seller?      @relation(fields: [sellerId], references: [id], onDelete: Cascade)
-  categoryId    String?
-  category      Category?    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  catalogItemId String?
-  catalogItem   CatalogItem? @relation(fields: [catalogItemId], references: [id], onDelete: Cascade)
-  listingId     String?
-  listing       Listing?     @relation("PriceRuleListing", fields: [listingId], references: [id], onDelete: Cascade)
-
-  startsAt DateTime?
-  endsAt   DateTime?
-  minStock Int?
-  maxStock Int?
-
-  appliedTo Listing[] @relation("AppliedPriceRule")
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([enabled])
-  @@map("price_rules")
-}
-
-// Акция для покупателя (в отличие от PriceRule — видна в мобилке: зачёркнутая старая
-// цена, плашка «−N%», название и текст). Заводит только SUPER_ADMIN, скидку оплачивает
-// маржа платформы: цена не опускается ниже costPrice, выплата продавцу не меняется.
-// Состав — явный список листингов (PromotionItem), у каждого может быть своя скидка.
+// Акция для покупателя (видна в мобилке: зачёркнутая старая цена, плашка «−N%»,
+// название и текст). Заводит только SUPER_ADMIN, скидку оплачивает маржа платформы:
+// цена не опускается ниже costPrice, выплата продавцу не меняется. Состав — явный
+// список листингов (PromotionItem), у каждого своя фиксированная цена по акции.
 //
 // Даты — с точностью до дня: startsAt/endsAt всегда ровно 00:00 по Ташкенту
 // (src/pricing/business-day.ts), endsAt исключающая — начало дня ПОСЛЕ последнего.
 model Promotion {
   id           String                 @id @default(cuid())
   enabled      Boolean                @default(true)
-  // Скидка от обычной розницы в базисных пунктах (2000 = −20%).
-  discountBps  Int
   startsAt     DateTime?
   endsAt       DateTime?
   translations PromotionTranslation[]
@@ -649,8 +627,8 @@ model PromotionItem {
   promotion   Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
   listingId   String
   listing     Listing   @relation(fields: [listingId], references: [id], onDelete: Cascade)
-  // Своя скидка этого листинга, bps; null — Promotion.discountBps.
-  discountBps Int?
+  // Цена листинга по акции, тийины. Процент скидки выводится из неё и обычной розницы.
+  promoPrice  Int
   createdAt   DateTime  @default(now())
 
   @@unique([promotionId, listingId])
@@ -809,8 +787,9 @@ model OrderItem {
   total     Int
   costPrice Int // себестоимость на момент оформления — выплата продавцу
   costTotal Int
-  /// Почему цена такая: { markupBps, appliedRuleId, ruleName }. null у заказов до
-  /// появления ценообразования.
+  /// Почему цена такая: { markupBps, source, oldPrice, promotionId, promotionTitle }.
+  /// У заказов до приоритетов вместо source — appliedRuleId/ruleName. null у заказов
+  /// до появления ценообразования.
   pricing   Json?
 
   createdAt DateTime @default(now())

@@ -8,6 +8,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../cache/cache.service';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { normalizePromotionTranslations } from '../i18n/translations.util';
+import { pickTranslation } from '../i18n/pick';
+import { DEFAULT_LOCALE } from '../i18n/locale';
 import { PricingService } from '../pricing/pricing.service';
 import { dayEndExclusive, dayStart } from '../pricing/business-day';
 import {
@@ -117,12 +119,12 @@ export class PromotionsService {
     const endsAt = toEndsAt(dto.endDate) ?? null;
     assertPeriod(startsAt, endsAt);
     const items = uniqueItems(dto.items);
+    await this.assertAboveCost(items);
 
     const id = await withFkErrors(() =>
       this.prisma.$transaction(async (tx) => {
         const created = await tx.promotion.create({
           data: {
-            discountBps: dto.discountBps,
             enabled: dto.enabled,
             startsAt,
             endsAt,
@@ -161,13 +163,13 @@ export class PromotionsService {
       endsAt === undefined ? old.endsAt : endsAt,
     );
     const items = dto.items ? uniqueItems(dto.items) : null;
+    if (items) await this.assertAboveCost(items);
 
     await withFkErrors(() =>
       this.prisma.$transaction(async (tx) => {
         await tx.promotion.update({
           where: { id },
           data: {
-            discountBps: dto.discountBps,
             enabled: dto.enabled,
             startsAt,
             endsAt,
@@ -221,6 +223,39 @@ export class PromotionsService {
     await this.cache.bump();
   }
 
+  /**
+   * Цена по акции не ниже себестоимости: скидку оплачивает маржа платформы, а не
+   * продавец. Движок всё равно держит пол costPrice — на случай, если продавец поднимет
+   * себестоимость уже после сохранения акции. Несуществующий листинг пропускаем —
+   * его поймает FK (withFkErrors).
+   */
+  private async assertAboveCost(
+    items: { listingId: string; promoPrice: number }[],
+  ): Promise<void> {
+    if (items.length === 0) return;
+    const listings = await this.prisma.listing.findMany({
+      where: { id: { in: items.map((i) => i.listingId) } },
+      select: {
+        id: true,
+        costPrice: true,
+        catalogItem: { select: { translations: true } },
+      },
+    });
+    const byId = new Map(listings.map((l) => [l.id, l]));
+    for (const item of items) {
+      const listing = byId.get(item.listingId);
+      if (listing && item.promoPrice < listing.costPrice) {
+        const name = pickTranslation(
+          listing.catalogItem.translations,
+          DEFAULT_LOCALE,
+        ).name;
+        throw new BadRequestException(
+          `Цена по акции ниже себестоимости: ${name}`,
+        );
+      }
+    }
+  }
+
   private async recalculate(
     tx: Prisma.TransactionClient,
     listingIds: string[],
@@ -244,7 +279,7 @@ function assertPeriod(startsAt: Date | null, endsAt: Date | null): void {
 // Один листинг дважды в одной акции — ошибка формы, а не повод для P2002 → 500.
 function uniqueItems(
   items: PromotionItemDto[],
-): { listingId: string; discountBps: number | null }[] {
+): { listingId: string; promoPrice: number }[] {
   const ids = new Set<string>();
   for (const item of items) {
     if (ids.has(item.listingId)) {
@@ -254,7 +289,7 @@ function uniqueItems(
   }
   return items.map((i) => ({
     listingId: i.listingId,
-    discountBps: i.discountBps ?? null,
+    promoPrice: i.promoPrice,
   }));
 }
 

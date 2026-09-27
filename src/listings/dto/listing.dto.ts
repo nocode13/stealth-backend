@@ -12,7 +12,9 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   Min,
+  ValidateIf,
 } from 'class-validator';
 import { CursorPaginationDto } from '../../common/dto/pagination.dto';
 
@@ -53,6 +55,20 @@ export class CreateListingDto {
   @IsOptional()
   @IsEnum(ListingStatus)
   status?: ListingStatus;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Только для SUPER_ADMIN: своя наценка поверх себестоимости, bps (3500 = 35%); ' +
+      'null — базовая ступенчатая наценка платформы',
+    example: 3500,
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsInt()
+  @Min(0)
+  @Max(100000)
+  customMarkupBps?: number | null;
 
   // SELLER всегда создаёт листинг себе (поле игнорируется), SUPER_ADMIN не привязан
   // к продавцу и обязан указать его явно.

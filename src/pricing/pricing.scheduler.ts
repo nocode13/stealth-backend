@@ -8,16 +8,16 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../cache/cache.service';
 import { nextBusinessMidnight } from './business-day';
-import { PricingService, ruleScopeWhere } from './pricing.service';
+import { PricingService } from './pricing.service';
 
 // Запас после полуночи: таймер Node может сработать на пару мс раньше расчётного, а
 // граница окна дат — ровно 00:00. Пара секунд гарантирует, что движок уже по ту сторону.
 const MIDNIGHT_SLACK_MS = 2_000;
 
 /**
- * Полуночный тикер цен. Даты правил и акций — с точностью до дня (00:00 по Ташкенту,
- * см. business-day.ts), поэтому по датам цена меняется ровно раз в сутки: в полночь
- * пересчитываются листинги тех правил/акций, чья граница (startsAt/endsAt) попала в
+ * Полуночный тикер цен. Даты акций — с точностью до дня (00:00 по Ташкенту, см.
+ * business-day.ts), поэтому по датам цена меняется ровно раз в сутки: в полночь
+ * пересчитываются листинги тех акций, чья граница (startsAt/endsAt) попала в
  * (прошлый запуск, сейчас]. Правки из админки применяются сразу, тикер их не ждёт.
  *
  * При старте — полный пересчёт: полночь могла пройти, пока сервис лежал/деплоился.
@@ -83,7 +83,7 @@ export class PricingScheduler
   }
 
   /**
-   * Листинги правил и акций, у которых граница дат попала в (from, now]. null —
+   * Листинги акций, у которых граница дат попала в (from, now]. null —
    * пересчитывать нечего.
    */
   private async transitionedScope(
@@ -96,17 +96,11 @@ export class PricingScheduler
         { endsAt: { gt: from, lte: now } },
       ],
     };
-    const [rules, promoItems] = await Promise.all([
-      this.prisma.priceRule.findMany({ where: { enabled: true, ...crossed } }),
-      this.prisma.promotionItem.findMany({
-        where: { promotion: { enabled: true, ...crossed } },
-        select: { listingId: true },
-      }),
-    ]);
-    const scopes: Prisma.ListingWhereInput[] = rules.map(ruleScopeWhere);
-    if (promoItems.length > 0) {
-      scopes.push({ id: { in: promoItems.map((i) => i.listingId) } });
-    }
-    return scopes.length > 0 ? { OR: scopes } : null;
+    const promoItems = await this.prisma.promotionItem.findMany({
+      where: { promotion: { enabled: true, ...crossed } },
+      select: { listingId: true },
+    });
+    if (promoItems.length === 0) return null;
+    return { id: { in: [...new Set(promoItems.map((i) => i.listingId))] } };
   }
 }

@@ -22,6 +22,7 @@ import { AddressesService } from '../addresses/addresses.service';
 import { CacheService } from '../cache/cache.service';
 import { SettingsService } from '../settings/settings.service';
 import { PricingService } from '../pricing/pricing.service';
+import { baseMarkup } from '../pricing/price-engine';
 import { err } from '../i18n/api-error';
 import { DEFAULT_LOCALE } from '../i18n/locale';
 import { toLocalizedText } from '../i18n/localized-text';
@@ -124,10 +125,8 @@ export class OrdersService {
       include: {
         listing: {
           include: {
-            // Имя сработавшего правила цены и акции — в снапшот позиции
-            // (OrderItem.pricing). Название акции — на DEFAULT_LOCALE: снапшот
-            // читает админка, мобилке он не отдаётся.
-            appliedRule: { select: { name: true } },
+            // Название акции — в снапшот позиции (OrderItem.pricing), на
+            // DEFAULT_LOCALE: снапшот читает админка, мобилке он не отдаётся.
             promotion: {
               select: {
                 translations: {
@@ -203,9 +202,9 @@ export class OrdersService {
         (item) => item.listing.catalogItem.freeDelivery,
       ),
     });
-    // Базовая наценка на момент оформления — только для снапшота «почему цена такая»:
+    // Ступени наценки на момент оформления — только для снапшота «почему цена такая»:
     // сама розница уже лежит в listing.price (её пишет PricingService).
-    const { markupBps } = await this.pricing.config();
+    const { markupTiers } = await this.pricing.config();
 
     const group = await this.prisma.$transaction(async (tx) => {
       const group = await tx.orderGroup.create({
@@ -280,9 +279,11 @@ export class OrdersService {
                 costPrice: item.listing.costPrice,
                 costTotal: item.listing.costPrice * item.quantity,
                 pricing: {
-                  markupBps,
-                  appliedRuleId: item.listing.appliedRuleId,
-                  ruleName: item.listing.appliedRule?.name ?? null,
+                  // Наценка обычной розницы этой позиции: своя или её ступени.
+                  markupBps:
+                    item.listing.customMarkupBps ??
+                    baseMarkup(item.listing.costPrice, markupTiers).markupBps,
+                  source: item.listing.priceSource,
                   // Розница без акции и сама акция: скидку оплатила маржа платформы.
                   oldPrice: item.listing.promotion
                     ? item.listing.oldPrice

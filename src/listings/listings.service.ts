@@ -57,12 +57,6 @@ const withCatalog = {
   promotion: { include: { translations: true } },
 } satisfies Prisma.ListingInclude;
 
-// Админке дополнительно нужно сработавшее правило цены (видит только SUPER_ADMIN).
-const withAdminCatalog = {
-  ...withCatalog,
-  appliedRule: { select: { id: true, name: true } },
-} satisfies Prisma.ListingInclude;
-
 // Порог word_similarity: 0 = что угодно совпадёт, 1 = точное совпадение.
 // 0.3 ловит опечатки/окончания, не превращая поиск в «покажи всё».
 const FUZZY_SEARCH_THRESHOLD = 0.3;
@@ -229,7 +223,7 @@ export class ListingsService {
           id: catalogItemIds ? { in: catalogItemIds } : undefined,
         },
       },
-      include: withAdminCatalog,
+      include: withCatalog,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       cursor: query.cursor ? { id: query.cursor } : undefined,
       skip: query.cursor ? 1 : 0,
@@ -255,7 +249,7 @@ export class ListingsService {
   private async findOwned(id: string, sellerId: string | null) {
     const listing = await this.prisma.listing.findUnique({
       where: { id },
-      include: withAdminCatalog,
+      include: withCatalog,
     });
     if (!listing) throw new NotFoundException(err(ERRORS.LISTING_NOT_FOUND));
     if (sellerId !== null && listing.sellerId !== sellerId) {
@@ -265,7 +259,7 @@ export class ListingsService {
   }
 
   private toAdmin(
-    listing: Prisma.ListingGetPayload<{ include: typeof withAdminCatalog }>,
+    listing: Prisma.ListingGetPayload<{ include: typeof withCatalog }>,
     role: Role,
   ): AdminListingResponse {
     return this.withUrls(toAdminListingResponse(listing, DEFAULT_LOCALE, role));
@@ -277,7 +271,7 @@ export class ListingsService {
     await this.pricing.recalculate({ id }, tx);
     return tx.listing.findUniqueOrThrow({
       where: { id },
-      include: withAdminCatalog,
+      include: withCatalog,
     });
   }
 
@@ -290,11 +284,12 @@ export class ListingsService {
     // в data он не должен попасть повторно.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { sellerId: _, ...data } = dto;
+    assertCanSetMarkup(dto, role);
     await this.catalog.assertUsable(data.catalogItemId, sellerId);
     try {
       const listing = await this.prisma.$transaction(async (tx) => {
-        // price NOT NULL, а посчитать её можно только по уже существующей строке
-        // (категория, правила) — кладём себестоимость и сразу пересчитываем.
+        // price NOT NULL, а считает её только PricingService.recalculate — кладём
+        // себестоимость и сразу пересчитываем.
         const created = await tx.listing.create({
           data: { ...data, price: data.costPrice, sellerId },
         });
@@ -321,6 +316,7 @@ export class ListingsService {
     dto: UpdateListingDto,
     role: Role,
   ): Promise<AdminListingResponse> {
+    assertCanSetMarkup(dto, role);
     await this.findOwned(id, sellerId);
     const listing = await this.prisma.$transaction(async (tx) => {
       await tx.listing.update({ where: { id }, data: dto });
@@ -334,5 +330,15 @@ export class ListingsService {
     await this.findOwned(id, sellerId);
     await this.prisma.listing.delete({ where: { id } });
     await this.cache.bump();
+  }
+}
+
+// Своя наценка — рычаг платформы: продавец её не видит и задать не может, даже себе.
+function assertCanSetMarkup(
+  dto: { customMarkupBps?: number | null },
+  role: Role,
+): void {
+  if (dto.customMarkupBps !== undefined && role !== Role.SUPER_ADMIN) {
+    throw new ForbiddenException('Свою наценку задаёт только супер-админ');
   }
 }

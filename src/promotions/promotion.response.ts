@@ -6,7 +6,7 @@ import type { PromotionState } from './dto/promotion.dto';
 
 // ── Мобилка ──
 // Акция на листинге: только то, что нужно карточке/деталке. Процент скидки клиент
-// считает сам из price/oldPrice — у позиции он может быть свой (PromotionItem).
+// считает сам из price/oldPrice — у каждой позиции своя цена по акции (PromotionItem).
 
 export type PromotionWithTranslations = Prisma.PromotionGetPayload<{
   include: { translations: true };
@@ -35,9 +35,16 @@ export const toListingPromotionResponse = (
 
 // ── Админка (только SUPER_ADMIN) ──
 
+// Цены состава нужны и списку — для колонки «до −N%». Позиций в акциях немного.
 export const withAdminPromotion = {
   translations: true,
   _count: { select: { items: true } },
+  items: {
+    select: {
+      promoPrice: true,
+      listing: { select: { price: true, oldPrice: true } },
+    },
+  },
 } satisfies Prisma.PromotionInclude;
 
 export const withAdminPromotionItems = {
@@ -79,7 +86,8 @@ export interface AdminPromotionResponse {
     description: string | null;
     auto: boolean;
   }[];
-  discountBps: number;
+  /** Наибольшая скидка по составу, bps; null — ни одна позиция не дешевле обычной цены. */
+  maxDiscountBps: number | null;
   enabled: boolean;
   startDate: string | null;
   endDate: string | null;
@@ -91,7 +99,9 @@ export interface AdminPromotionResponse {
 
 export interface AdminPromotionItemResponse {
   listingId: string;
-  /** Своя скидка; null — скидка акции. */
+  /** Цена по акции, тийины. */
+  promoPrice: number;
+  /** Скидка от обычной розницы, bps; null — цена по акции не ниже обычной. */
   discountBps: number | null;
   listing: {
     id: string;
@@ -110,6 +120,19 @@ export interface AdminPromotionItemResponse {
 
 export interface AdminPromotionDetailResponse extends AdminPromotionResponse {
   items: AdminPromotionItemResponse[];
+}
+
+/**
+ * Скидка цены по акции от обычной розницы листинга, bps. Обычная розница — oldPrice,
+ * если листинг сейчас на какой-то акции, иначе price.
+ */
+function discountBps(
+  promoPrice: number,
+  listing: { price: number; oldPrice: number | null },
+): number | null {
+  const regular = listing.oldPrice ?? listing.price;
+  if (regular <= 0 || promoPrice >= regular) return null;
+  return Math.round(((regular - promoPrice) * 10_000) / regular);
 }
 
 export function promotionState(
@@ -137,7 +160,10 @@ export const toAdminPromotionResponse = (
       auto: t.auto,
     };
   }),
-  discountBps: p.discountBps,
+  maxDiscountBps: p.items.reduce<number | null>((max, item) => {
+    const bps = discountBps(item.promoPrice, item.listing);
+    return bps !== null && (max === null || bps > max) ? bps : max;
+  }, null),
   enabled: p.enabled,
   startDate: toStartDay(p.startsAt),
   endDate: toEndDay(p.endsAt),
@@ -154,7 +180,8 @@ export const toAdminPromotionDetailResponse = (
   ...toAdminPromotionResponse(p, now),
   items: p.items.map((item) => ({
     listingId: item.listingId,
-    discountBps: item.discountBps,
+    promoPrice: item.promoPrice,
+    discountBps: discountBps(item.promoPrice, item.listing),
     listing: {
       id: item.listing.id,
       name: pickTranslation(

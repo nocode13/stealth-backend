@@ -1,5 +1,36 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsInt, IsOptional, Max, Min, ValidateIf } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import {
+  IsArray,
+  IsInt,
+  IsOptional,
+  Max,
+  Min,
+  ValidateIf,
+  ValidateNested,
+} from 'class-validator';
+
+/** Ступень базовой наценки: от minCost (себестоимость, включительно) до следующей. */
+export class MarkupTierDto {
+  @ApiProperty({
+    description:
+      'Нижняя граница себестоимости за единицу, в тийинах, включительно. У первой ступени — 0',
+    example: 0,
+  })
+  @IsInt()
+  @Min(0)
+  minCost: number;
+
+  @ApiProperty({
+    description:
+      'Наценка поверх себестоимости, в базисных пунктах (6000 = 60%)',
+    example: 6000,
+  })
+  @IsInt()
+  @Min(0)
+  @Max(100000)
+  markupBps: number;
+}
 
 export class UpdatePlatformSettingsDto {
   @ApiPropertyOptional({
@@ -22,15 +53,16 @@ export class UpdatePlatformSettingsDto {
   freeDeliveryThreshold?: number | null;
 
   @ApiPropertyOptional({
+    type: [MarkupTierDto],
     description:
-      'Базовая наценка платформы поверх себестоимости, в базисных пунктах (2000 = 20%)',
-    example: 2000,
+      'Ступени базовой наценки по себестоимости — заменяют прежние целиком. Первая с 0, ' +
+      'границы по возрастанию. Смена пересчитывает цены всей витрины',
   })
   @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Max(100000)
-  markupBps?: number;
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => MarkupTierDto)
+  markupTiers?: MarkupTierDto[];
 
   @ApiPropertyOptional({
     description:
