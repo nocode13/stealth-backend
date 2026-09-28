@@ -18,7 +18,10 @@ export class MobileListingsController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Одно активное предложение (карточка товара)' })
+  @ApiOperation({
+    summary: 'Одно активное предложение (карточка товара)',
+    description: 'id — cuid листинга или его артикул (code)',
+  })
   findOne(@Param('id') id: string, @ReqLocale() locale: Locale) {
     return this.listings.findOnePublic(id, locale);
   }

@@ -543,6 +543,10 @@ model CatalogItemMedia {
 // не уходит никогда.
 model Listing {
   id            String        @id @default(cuid())
+  // Артикул: короткий человекочитаемый номер для ссылок (app.egen.uz/l/<code>) и
+  // поиска. Сквозная последовательность с 10001 (см. миграцию listing_code);
+  // показывается как «#10001», в БД — просто число.
+  code          Int           @unique @default(autoincrement())
   sellerId      String
   seller        Seller        @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   catalogItemId String

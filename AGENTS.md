@@ -117,7 +117,13 @@ src/
   см. «Ценообразование»), `customMarkupBps?` (своя наценка, ставит только `SUPER_ADMIN`),
   `priceSource` и `oldPrice?`/`promotionId?`/`onPromo` (результат движка, пишет только он), `stock`, `status` (`DRAFT|ACTIVE|ARCHIVED`),
   `@@unique([sellerId, catalogItemId])`. При создании `CatalogService.assertUsable`
-  проверяет, что позиция одобрена и видна этому продавцу.
+  проверяет, что позиция одобрена и видна этому продавцу. `code` — **артикул**: unique `Int`
+  из своей последовательности с 10001 (миграция `listing_code`), руками не пишется.
+  Показывается как `#10001`, идёт в короткую ссылку `app.egen.uz/l/<code>`.
+  `GET /mobile/listings/:id` принимает и cuid, и артикул (чисто цифровой параметр — всегда
+  артикул, cuid начинается с буквы); `search` вида `10001`/`#10001` (4–7 цифр,
+  `src/listings/listing-code.ts`) ищет точно по `code` вместо fuzzy по названию — и в витрине,
+  и в `admin/listings`.
 - **MarkupTier** — ступень базовой наценки по себестоимости (`minCost` от, `markupBps`),
   правится набором через `admin/settings`. **PricePriority** — порядок источников цены
   (`PriceSource`: `PROMOTION`/`LISTING_MARKUP`/`BASE_MARKUP`), ровно три строки, как
@@ -891,6 +897,9 @@ Buckets приватные и публичных URL не дают, а ссыл�
   дублей; `price_asc`/`price_desc` — строго по цене; корзина отдаёт `savings`; `SELLER` в
   `/admin/listings` не видит `oldPrice`/`promotion`; акция с `startDate` = завтра включается в
   00:00 по Ташкенту сама (в БД `startsAt` = `…T19:00:00Z` предыдущего дня по UTC).
+- артикул: `GET /mobile/listings/10001` и `GET /mobile/listings/<cuid>` того же листинга
+  отдают одно и то же; `?search=10001` и `?search=%2310001` находят ровно его, `?search=роза`
+  ищет по названию как раньше; у существующих листингов после миграции `code` ≥ 10001.
 - новинки: `GET /mobile/listings` без параметров отдаёт то же, что и раньше;
   `?createdWithinDays=7` — только `createdAt >= now − 7д`, акционные первыми, курсор без дублей;
   `createdWithinDays` = `0`/`91`/`abc` → 400; `/admin/listings?createdWithinDays=3` тоже фильтрует.
