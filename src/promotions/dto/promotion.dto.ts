@@ -10,18 +10,12 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  Max,
   MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
 import { CursorPaginationDto } from '../../common/dto/pagination.dto';
 import { IsBusinessDay } from '../../pricing/dto/business-day.validator';
-
-// Скидка акции — от 1% до 99%, в bps. 100% не даём: цену всё равно упрёт в
-// себестоимость, а «−100%» на плашке — очевидная опечатка.
-const MIN_DISCOUNT_BPS = 100;
-const MAX_DISCOUNT_BPS = 9_900;
 
 export class PromotionTranslationDto {
   @ApiProperty({ enum: Locale, example: Locale.RU })
@@ -53,16 +47,15 @@ export class PromotionItemDto {
   @IsString()
   listingId: string;
 
-  @ApiPropertyOptional({
-    nullable: true,
-    description: 'Своя скидка этого листинга, bps; null — скидка акции',
-    example: 3000,
+  @ApiProperty({
+    description:
+      'Цена листинга по акции, в тийинах. Не ниже себестоимости; процент скидки ' +
+      'считается от обычной розницы',
+    example: 9900000,
   })
-  @IsOptional()
   @IsInt()
-  @Min(MIN_DISCOUNT_BPS)
-  @Max(MAX_DISCOUNT_BPS)
-  discountBps?: number | null;
+  @Min(1)
+  promoPrice: number;
 }
 
 export class CreatePromotionDto {
@@ -75,12 +68,6 @@ export class CreatePromotionDto {
   @ValidateNested({ each: true })
   @Type(() => PromotionTranslationDto)
   translations: PromotionTranslationDto[];
-
-  @ApiProperty({ description: 'Скидка от обычной розницы, bps (2000 = −20%)' })
-  @IsInt()
-  @Min(MIN_DISCOUNT_BPS)
-  @Max(MAX_DISCOUNT_BPS)
-  discountBps: number;
 
   @ApiPropertyOptional({ default: true })
   @IsOptional()
@@ -123,13 +110,6 @@ export class UpdatePromotionDto {
   @ValidateNested({ each: true })
   @Type(() => PromotionTranslationDto)
   translations?: PromotionTranslationDto[];
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsInt()
-  @Min(MIN_DISCOUNT_BPS)
-  @Max(MAX_DISCOUNT_BPS)
-  discountBps?: number;
 
   @ApiPropertyOptional()
   @IsOptional()

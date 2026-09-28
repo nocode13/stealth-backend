@@ -1,8 +1,7 @@
-import { PriceRuleAction } from '@prisma/client';
-import type { PriceRule } from '@prisma/client';
+import { PriceSource } from '@prisma/client';
 
-// Движок цены — чистые функции без I/O: всё нужное (листинг, настройки, правила,
-// акции, «сейчас») приходит аргументами, поэтому его можно гонять в тестах и на любом
+// Движок цены — чистые функции без I/O: всё нужное (листинг, настройки, акции,
+// «сейчас») приходит аргументами, поэтому его можно гонять в тестах и на любом
 // объёме данных. Писать результат в БД — дело PricingService.
 //
 // Вся арифметика целочисленная: деньги в тийинах, проценты в базисных пунктах
@@ -12,46 +11,30 @@ const BPS = 10_000;
 
 /** То, что движку нужно знать о листинге. */
 export interface PriceTarget {
-  listingId: string;
-  sellerId: string;
-  catalogItemId: string;
-  categoryId: string | null;
   costPrice: number;
-  stock: number;
+  /** Своя наценка листинга, bps; null — базовая ступенчатая. */
+  customMarkupBps: number | null;
+}
+
+/** Ступень базовой наценки: от minCost (тийины, включительно) до следующей ступени. */
+export interface MarkupTierInput {
+  minCost: number;
+  markupBps: number;
 }
 
 export interface PriceConfig {
-  /** Базовая наценка платформы, bps. */
-  markupBps: number;
+  /** Ступени базовой наценки по возрастанию minCost, первая — с 0. */
+  markupTiers: MarkupTierInput[];
   /** Шаг округления вверх, тийины. */
   roundingStep: number;
+  /** Порядок источников цены: срабатывает первый подходящий. */
+  order: PriceSource[];
 }
 
-export type PriceRuleInput = Pick<
-  PriceRule,
-  | 'id'
-  | 'name'
-  | 'enabled'
-  | 'priority'
-  | 'action'
-  | 'value'
-  | 'sellerId'
-  | 'categoryId'
-  | 'catalogItemId'
-  | 'listingId'
-  | 'startsAt'
-  | 'endsAt'
-  | 'minStock'
-  | 'maxStock'
->;
-
-/**
- * Акция, в которой состоит листинг. discountBps уже эффективный:
- * PromotionItem.discountBps ?? Promotion.discountBps.
- */
+/** Акция, в которой состоит листинг, с его фиксированной ценой по ней. */
 export interface PromotionCandidate {
   promotionId: string;
-  discountBps: number;
+  promoPrice: number;
   startsAt: Date | null;
   endsAt: Date | null;
 }
@@ -63,12 +46,18 @@ export interface ResolvedPrice {
   oldPrice: number | null;
   /** null — акции нет. */
   promotionId: string | null;
-  /** null — сработала базовая наценка. */
-  appliedRuleId: string | null;
-  ruleName: string | null;
-  /** Базовая наценка на момент расчёта — для снапшота в заказ. */
+  /** Какой источник дал цену. */
+  source: PriceSource;
+  /** Наценка обычной розницы (своя или ступени) — для снапшота в заказ. */
   markupBps: number;
 }
+
+/** Порядок источников по умолчанию — он же в миграции 20260927120000_price_sources. */
+export const DEFAULT_PRICE_ORDER: PriceSource[] = [
+  PriceSource.PROMOTION,
+  PriceSource.LISTING_MARKUP,
+  PriceSource.BASE_MARKUP,
+];
 
 // Вверх, как и roundUp: доли тийина всегда в пользу платформы. На этом держится
 // бэкфилл миграции 20260924120000_pricing: costPrice = FLOOR(price / 1.2) при
@@ -90,125 +79,141 @@ export function isInWindow(
   return true;
 }
 
-/** Подходит ли правило под листинг: область (И по всем заданным полям) + условия. */
-export function matchesRule(
-  rule: PriceRuleInput,
-  target: PriceTarget,
-  now: Date,
-): boolean {
-  if (!rule.enabled) return false;
-  if (rule.listingId !== null && rule.listingId !== target.listingId) {
-    return false;
-  }
-  if (rule.sellerId !== null && rule.sellerId !== target.sellerId) return false;
-  if (
-    rule.catalogItemId !== null &&
-    rule.catalogItemId !== target.catalogItemId
-  ) {
-    return false;
-  }
-  if (rule.categoryId !== null && rule.categoryId !== target.categoryId) {
-    return false;
-  }
-  if (!isInWindow(rule.startsAt, rule.endsAt, now)) return false;
-  if (rule.minStock !== null && target.stock < rule.minStock) return false;
-  if (rule.maxStock !== null && target.stock > rule.maxStock) return false;
-  return true;
-}
-
 /**
- * Цена-кандидат одного правила, до округления и пола. Новый тип правила — новое
- * значение PriceRuleAction и ветка здесь; остальной конвейер не меняется.
+ * Базовая ступенчатая наценка, до округления. Вся себестоимость берётся под процент
+ * своей ступени, но цена не опускается ниже максимума предыдущих ступеней: иначе у
+ * границы «до 50 000 → 60%, дальше 40%» товар за 51 000 стоил бы на витрине дешевле
+ * товара за 50 000. Возвращает и процент ступени — для снапшота в заказ.
  */
-export function applyAction(
-  rule: Pick<PriceRuleInput, 'action' | 'value'>,
+export function baseMarkup(
   costPrice: number,
-  config: PriceConfig,
-): number {
-  switch (rule.action) {
-    case PriceRuleAction.MARKUP_PERCENT:
-      return applyBps(costPrice, rule.value);
-    case PriceRuleAction.DISCOUNT_PERCENT:
-      return applyBps(applyBps(costPrice, config.markupBps), -rule.value);
-    case PriceRuleAction.FIXED_PRICE:
-      return rule.value;
+  tiers: MarkupTierInput[],
+): { price: number; markupBps: number } {
+  if (tiers.length === 0) return { price: costPrice, markupBps: 0 };
+  let floor = 0;
+  let tier = tiers[0];
+  for (let i = 1; i < tiers.length && tiers[i].minCost <= costPrice; i++) {
+    // Максимум предыдущей ступени — её цена на последнем тийине перед границей.
+    floor = Math.max(floor, applyBps(tiers[i].minCost - 1, tier.markupBps));
+    tier = tiers[i];
   }
-}
-
-/**
- * Обычная розница листинга (без акций). Из подходящих правил применяется одно — с
- * наибольшим priority, при равенстве — дающее меньшую цену. Не подошло ни одно —
- * базовая наценка. Результат округляется вверх до шага и никогда не опускается
- * ниже себестоимости: продавать в минус движок не умеет by design.
- */
-function resolveRegularPrice(
-  target: PriceTarget,
-  config: PriceConfig,
-  rules: PriceRuleInput[],
-  now: Date,
-): { price: number; rule: PriceRuleInput | null } {
-  let best: { rule: PriceRuleInput; price: number } | null = null;
-  for (const rule of rules) {
-    if (!matchesRule(rule, target, now)) continue;
-    const price = applyAction(rule, target.costPrice, config);
-    if (
-      best === null ||
-      rule.priority > best.rule.priority ||
-      (rule.priority === best.rule.priority && price < best.price)
-    ) {
-      best = { rule, price };
-    }
-  }
-
-  const raw = best ? best.price : applyBps(target.costPrice, config.markupBps);
   return {
-    price: Math.max(roundUp(raw, config.roundingStep), target.costPrice),
-    rule: best?.rule ?? null,
+    price: Math.max(applyBps(costPrice, tier.markupBps), floor),
+    markupBps: tier.markupBps,
   };
 }
 
 /**
- * Итоговая розничная цена листинга — два этапа:
- * 1. обычная розница (правила/наценка, см. resolveRegularPrice);
- * 2. акция поверх неё: из акций листинга в окне дат берётся дающая наименьшую цену
- *    (при равенстве — с меньшим id, чтобы результат был детерминирован). Скидка
- *    считается от обычной розницы, округляется вверх и упирается в costPrice —
- *    скидку оплачивает маржа платформы, не продавец.
- * Если акционная цена не ниже обычной (уперлась в себестоимость), акция НЕ
- * применяется: зачёркивать «было» при той же цене — фейковая скидка.
+ * Обычная розница листинга (без акции): своя наценка, если задана, иначе ступенчатая.
+ * Округляется вверх до шага и никогда не опускается ниже себестоимости.
+ */
+function regularPrice(
+  target: PriceTarget,
+  config: PriceConfig,
+  custom: boolean,
+): { price: number; markupBps: number } {
+  const raw =
+    custom && target.customMarkupBps !== null
+      ? {
+          price: applyBps(target.costPrice, target.customMarkupBps),
+          markupBps: target.customMarkupBps,
+        }
+      : baseMarkup(target.costPrice, config.markupTiers);
+  return {
+    price: Math.max(roundUp(raw.price, config.roundingStep), target.costPrice),
+    markupBps: raw.markupBps,
+  };
+}
+
+/**
+ * Лучшая акция листинга на сейчас: из акций в окне дат — дающая наименьшую цену (при
+ * равенстве — с меньшим id, чтобы результат был детерминирован). Цена по акции
+ * фиксированная, без округления (её ввёл админ), но не ниже себестоимости — скидку
+ * оплачивает маржа платформы, не продавец.
+ */
+function bestPromotion(
+  target: PriceTarget,
+  promotions: PromotionCandidate[],
+  now: Date,
+): { promotionId: string; price: number } | null {
+  let best: { promotionId: string; price: number } | null = null;
+  for (const p of promotions) {
+    if (!isInWindow(p.startsAt, p.endsAt, now)) continue;
+    const price = Math.max(p.promoPrice, target.costPrice);
+    if (
+      best === null ||
+      price < best.price ||
+      (price === best.price && p.promotionId < best.promotionId)
+    ) {
+      best = { promotionId: p.promotionId, price };
+    }
+  }
+  return best;
+}
+
+/**
+ * Итоговая розничная цена листинга. Источники пробуются в порядке `config.order`,
+ * срабатывает первый подходящий:
+ * - PROMOTION — есть акция в окне дат и её цена ниже обычной розницы. «Было» — обычная
+ *   розница (своя наценка, если задана, иначе ступенчатая). Если акционная цена не ниже
+ *   обычной, акция НЕ применяется: зачёркивать «было» при той же цене — фейковая скидка;
+ * - LISTING_MARKUP — у листинга задана своя наценка;
+ * - BASE_MARKUP — ступенчатая наценка платформы, подходит всегда.
  */
 export function resolvePrice(
   target: PriceTarget,
   config: PriceConfig,
-  rules: PriceRuleInput[],
   promotions: PromotionCandidate[],
   now: Date,
 ): ResolvedPrice {
-  const regular = resolveRegularPrice(target, config, rules, now);
+  const regular = regularPrice(target, config, true);
 
-  let promo: { promotionId: string; price: number } | null = null;
-  for (const p of promotions) {
-    if (!isInWindow(p.startsAt, p.endsAt, now)) continue;
-    const price = Math.max(
-      roundUp(applyBps(regular.price, -p.discountBps), config.roundingStep),
-      target.costPrice,
-    );
-    if (
-      promo === null ||
-      price < promo.price ||
-      (price === promo.price && p.promotionId < promo.promotionId)
-    ) {
-      promo = { promotionId: p.promotionId, price };
+  for (const source of config.order) {
+    switch (source) {
+      case PriceSource.PROMOTION: {
+        const promo = bestPromotion(target, promotions, now);
+        if (promo !== null && promo.price < regular.price) {
+          return {
+            price: promo.price,
+            oldPrice: regular.price,
+            promotionId: promo.promotionId,
+            source,
+            markupBps: regular.markupBps,
+          };
+        }
+        break;
+      }
+      case PriceSource.LISTING_MARKUP:
+        if (target.customMarkupBps !== null) {
+          return {
+            price: regular.price,
+            oldPrice: null,
+            promotionId: null,
+            source,
+            markupBps: regular.markupBps,
+          };
+        }
+        break;
+      case PriceSource.BASE_MARKUP: {
+        const base = regularPrice(target, config, false);
+        return {
+          price: base.price,
+          oldPrice: null,
+          promotionId: null,
+          source,
+          markupBps: base.markupBps,
+        };
+      }
     }
   }
-  const applied = promo !== null && promo.price < regular.price ? promo : null;
 
+  // Порядок без BASE_MARKUP (не должно случаться: его держит PricingService).
+  const base = regularPrice(target, config, false);
   return {
-    price: applied ? applied.price : regular.price,
-    oldPrice: applied ? regular.price : null,
-    promotionId: applied ? applied.promotionId : null,
-    appliedRuleId: regular.rule?.id ?? null,
-    ruleName: regular.rule?.name ?? null,
-    markupBps: config.markupBps,
+    price: base.price,
+    oldPrice: null,
+    promotionId: null,
+    source: PriceSource.BASE_MARKUP,
+    markupBps: base.markupBps,
   };
 }

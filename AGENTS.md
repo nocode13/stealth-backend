@@ -61,7 +61,7 @@ src/
   users/ sellers/ categories/ catalog/ listings/ cart/ addresses/ settings/
   app-version/             # версии в сторах для плашки «обновитесь» в мобилке
   pricing/                 # движок цены (price-engine.ts) + PricingService.recalculate,
-                           # CRUD правил, полуночный тикер (pricing.scheduler.ts), business-day.ts
+                           # ступени наценки и приоритеты, полуночный тикер (pricing.scheduler.ts), business-day.ts
   promotions/              # акции для покупателя (CRUD; цены по ним считает pricing/)
   orders/                  # OrdersService, order-status.ts, order-notifier.service.ts
   notifications/ metrics/  # in-app лента · агрегаты для дашборда админки
@@ -114,14 +114,16 @@ src/
   `CountryTranslation`, тот же инвариант, что у `CategoryTranslation`.
 - **Listing** — предложение продавца поверх позиции: `costPrice` (себестоимость, вводит
   продавец), `price` (розница, **денормализованный результат движка**, руками не пишется —
-  см. «Ценообразование»), `appliedRuleId?`, `oldPrice?`/`promotionId?`/`onPromo` (результат
-  акции, тоже пишет только движок), `stock`, `status` (`DRAFT|ACTIVE|ARCHIVED`),
+  см. «Ценообразование»), `customMarkupBps?` (своя наценка, ставит только `SUPER_ADMIN`),
+  `priceSource` и `oldPrice?`/`promotionId?`/`onPromo` (результат движка, пишет только он), `stock`, `status` (`DRAFT|ACTIVE|ARCHIVED`),
   `@@unique([sellerId, catalogItemId])`. При создании `CatalogService.assertUsable`
   проверяет, что позиция одобрена и видна этому продавцу.
-- **PriceRule** — скрытое правило цены (область, приоритет, действие, окно дат, диапазон
-  остатка), CRUD `admin/price-rules`. **Promotion** (+ `PromotionTranslation`,
-  `PromotionItem`) — акция, видимая покупателю: скидка в bps, окно дат, явный список
-  листингов (у позиции может быть своя скидка). См. «Ценообразование».
+- **MarkupTier** — ступень базовой наценки по себестоимости (`minCost` от, `markupBps`),
+  правится набором через `admin/settings`. **PricePriority** — порядок источников цены
+  (`PriceSource`: `PROMOTION`/`LISTING_MARKUP`/`BASE_MARKUP`), ровно три строки, как
+  `AppVersion`, правит `admin/price-priorities`. **Promotion** (+ `PromotionTranslation`,
+  `PromotionItem`) — акция, видимая покупателю: окно дат и явный список листингов, у каждого
+  своя фиксированная цена `promoPrice`. См. «Ценообразование».
 - **PlatformSettings** — синглтон-строка (`id = "default"`), правит `SUPER_ADMIN` из
   `admin/settings`: `deliveryFee` (тариф за чекаут) и `freeDeliveryThreshold?` (порог
   бесплатной доставки, `null` = порога нет). `SettingsService.quote()` — единственное
@@ -262,12 +264,12 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | `admin/sellers` | SUPER_ADMIN | CRUD + `POST /:id/image` (баннер) |
 | `admin/sellers/:sellerId/staff` | SUPER_ADMIN, **владелец** | `GET /`, `POST /`, `PATCH /:staffId`, `DELETE /:staffId`, `POST /:staffId/telegram/invite`, `POST /:staffId/telegram/unlink` |
 | `admin/metrics` | SUPER_ADMIN | `GET users`, `GET orders`, `GET catalog`, `GET overview` |
-| `admin/settings` | SUPER_ADMIN | `GET /`, `PATCH /` — тариф доставки/порог бесплатной доставки, базовая наценка `markupBps` и шаг округления `priceRoundingStep` (их смена пересчитывает цены всей витрины) |
+| `admin/settings` | SUPER_ADMIN | `GET /`, `PATCH /` — тариф доставки/порог бесплатной доставки, ступени базовой наценки `markupTiers` (набор заменяется целиком) и шаг округления `priceRoundingStep` (их смена пересчитывает цены всей витрины) |
 | `admin/app-versions` | SUPER_ADMIN | `GET /`, `PATCH /:platform` — версии приложения в сторах |
 | `admin/broadcasts` | SUPER_ADMIN | `GET /`, `GET /:id`, `POST /audience-count`, `POST /` — ручные рассылки покупателям (см. «Уведомления → Рассылки») |
 | `admin/customers` | SUPER_ADMIN | `GET /?search` — живые покупатели, выбор получателей рассылки |
 | `admin/promotions` | SUPER_ADMIN | CRUD акций, фильтр `state=active\|scheduled\|ended\|disabled`; `PATCH` с `items` заменяет состав целиком. Мутация сразу пересчитывает цены листингов акции (старого и нового состава) |
-| `admin/price-rules` | SUPER_ADMIN | CRUD скрытых правил цены; мутация пересчитывает витрину в области правила (старой и новой) |
+| `admin/price-priorities` | SUPER_ADMIN | `GET /` — источники цены сверху вниз, `PUT /` `{ order }` — новый порядок целиком (`BASE_MARKUP` последним, иначе 400); пересчитывает всю витрину |
 
 `SELLER` жёстко скоупится своим `sellerId`; его query-параметр `sellerId` игнорируется.
 
@@ -282,7 +284,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | Роут | Guard | Эндпоинты |
 |---|---|---|
 | `mobile/auth` | JwtAuthGuard на `me`/`logout`/`email/link/*` | `POST telegram/session`, `GET telegram/session/:nonce`, `POST telegram/miniapp`, `POST email/session`, `POST email/verify`, `POST email/link/session`, `POST email/link/verify`, `POST refresh`, `GET/PATCH me`, `POST logout` |
-| `mobile/listings`, `mobile/categories`, `mobile/countries`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query. `mobile/listings` дополнительно принимает `sort` (`newest`\|`price_asc`\|`price_desc`\|`free_delivery`) — опционален, без него — `createdAt desc`. Без sort, `newest` и `free_delivery` сначала отдают акционные (`onPromo`), ценовые сортировки — нет. `free_delivery` — затем позиции с `CatalogItem.freeDelivery`, внутри групп сначала дешёвые; фильтра по доставке нет намеренно (он прятал половину витрины). `mobile/countries` отдаёт справочник целиком — фильтра видимости у стран нет |
+| `mobile/listings`, `mobile/categories`, `mobile/countries`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query. `mobile/listings` дополнительно принимает `sort` (`newest`\|`price_asc`\|`price_desc`\|`free_delivery`) — опционален, без него — `createdAt desc`. Без sort, `newest` и `free_delivery` сначала отдают акционные (`onPromo`), ценовые сортировки — нет. `free_delivery` — затем позиции с `CatalogItem.freeDelivery`, внутри групп сначала дешёвые; фильтра по доставке нет намеренно (он прятал половину витрины). Опциональный `createdWithinDays` (1..90) — только листинги с `createdAt` за последние N дней, скользящее окно от текущего момента; сортировка при этом обычная. Нужен секции «Новинки недели» (мобилка шлёт `7`); без параметра выдача прежняя — старые сборки его не шлют. Тот же параметр принимает и `admin/listings`. `mobile/countries` отдаёт справочник целиком — фильтра видимости у стран нет |
 | `mobile/catalog` | JwtAuthGuard | `GET /` — ⚠️ асимметрия: остальная витрина публичная |
 | `mobile/cart` | JwtAuthGuard | `GET /`, `POST items`, `PATCH/DELETE items/:id`, `DELETE /` |
 | `mobile/favorites` | JwtAuthGuard | `GET /` — `CursorPage<ListingResponse>`, `GET /ids` — `{ listingIds }`, `PUT /:listingId`, `DELETE /:listingId` |
@@ -370,7 +372,7 @@ Payme/Click — добавлением значений в енам; `providerTx
 раньше; `costPrice` не уходит в мобилку никогда (мобильные мапперы перечисляют поля явно,
 корзина — тоже, без спреда Prisma-строки). В админке `SELLER` видит только себестоимость
 (`toAdminListingResponse`, `toSellerOrderGroupResponse` подставляет её вместо розницы в те же
-поля), `SUPER_ADMIN` — обе цены, сработавшее правило и маржу (`toAdminOrderGroupResponse`).
+поля), `SUPER_ADMIN` — обе цены, источник цены, свою наценку и маржу (`toAdminOrderGroupResponse`).
 
 **`price` денормализована: считается при записи, а не при чтении.** Иначе сломались бы
 сортировка/фильтр/курсор по цене в SQL и индекс `(status, price)`. Писать её может
@@ -378,42 +380,55 @@ Payme/Click — добавлением значений в енам; `providerTx
 листинги кусками, прогоняет движок и обновляет лишь изменившиеся строки. `cache.bump()` —
 на вызывающем, после коммита. Триггеры:
 
-- `ListingsService.create/update` — в той же транзакции, что и запись `costPrice`/`stock`;
-- `PATCH /admin/settings` с `markupBps`/`priceRoundingStep` — вся витрина
-  (`PricingService.updateSettings`; живёт в pricing, т.к. `SettingsModule` о ценообразовании
-  не знает — иначе цикл модулей);
+- `ListingsService.create/update` — в той же транзакции, что и запись `costPrice`/
+  `customMarkupBps` (свою наценку принимает только от `SUPER_ADMIN`, продавцу — 403);
+- `PATCH /admin/settings` с `markupTiers`/`priceRoundingStep` и `PUT /admin/price-priorities`
+  — вся витрина (`PricingService.updateSettings`/`setPriorities`; живут в pricing, т.к.
+  `SettingsModule` о ценообразовании не знает — иначе цикл модулей);
 - чекаут (списание остатка) и отмена (`restock`) — затронутые листинги, в той же транзакции;
-- CRUD `admin/price-rules` и `admin/promotions` — область правила / состав акции (старые и
-  новые), в той же транзакции;
-- полночь по Ташкенту (`PricingScheduler`) — правила и акции, чья граница дат наступила.
+- CRUD `admin/promotions` — состав акции (старый и новый), в той же транзакции;
+- полночь по Ташкенту (`PricingScheduler`) — акции, чья граница дат наступила.
 
-⚠️ Любой новый код, меняющий вход движка (`costPrice`, `stock`, категорию позиции, правила,
-акции, настройки), обязан звать `recalculate` — иначе витрина покажет цену, не соответствующую
-правилам.
+⚠️ Любой новый код, меняющий вход движка (`costPrice`, `customMarkupBps`, ступени, приоритеты,
+акции, настройки), обязан звать `recalculate` — иначе витрина покажет устаревшую цену.
 
-**Движок — чистая функция** `resolvePrice` (`src/pricing/price-engine.ts`), без I/O. Кандидат
-по умолчанию — базовая наценка `PlatformSettings.markupBps` (bps, 2000 = 20%). Из подходящих
-включённых `PriceRule` (область — `sellerId`/`categoryId`/`catalogItemId`/`listingId`, `null` =
-везде, условия — `startsAt`/`endsAt`/`minStock`/`maxStock`) применяется **одно**, с
-наибольшим `priority`, при равенстве — дающее меньшую цену. Итог округляется вверх до
-`priceRoundingStep` и **никогда не опускается ниже `costPrice`**. Арифметика целочисленная
-(тийины и bps). Новый тип правила = значение `PriceRuleAction` + ветка в `applyAction`.
+**Движок — чистая функция** `resolvePrice` (`src/pricing/price-engine.ts`), без I/O. Источники
+цены пробуются в порядке `PricePriority` (по умолчанию акция → своя наценка → базовая),
+срабатывает **первый подходящий**: `PROMOTION` — есть акция в окне дат и её цена ниже обычной
+розницы; `LISTING_MARKUP` — у листинга задан `customMarkupBps`; `BASE_MARKUP` — подходит
+всегда, поэтому обязан быть последним (`setPriorities` отвергает иной порядок). Если своя
+наценка стоит выше акций, акция на таком листинге не применяется. Результат пишется в
+`Listing.priceSource`.
+
+**Базовая наценка — ступени** `MarkupTier` по себестоимости за единицу: `minCost` — нижняя
+граница включительно (первая ступень всегда с 0), верхняя — следующая ступень. Вся
+себестоимость берётся под процент своей ступени («плоско»), но цена **не опускается ниже
+максимума предыдущих ступеней** (`baseMarkup`): иначе у границы «до 50 000 → 60%, дальше
+40%» товар за 51 000 стоил бы дешевле товара за 50 000 — за границей цена стоит «полкой»,
+пока процент новой ступени её не догонит. Обычная розница (своя или ступенчатая) округляется
+вверх до `priceRoundingStep` и **никогда не опускается ниже `costPrice`**. Арифметика
+целочисленная (тийины и bps).
 
 **Снапшот в заказ.** `OrderItem` хранит `price`/`total` (розница), `costPrice`/`costTotal` и
-`pricing: { markupBps, appliedRuleId, ruleName }`; `Order.costTotal` — выплата продавцу.
+`pricing: { markupBps, source }` (`markupBps` — наценка обычной розницы именно этой позиции:
+своя или её ступени); `Order.costTotal` — выплата продавцу. У заказов до миграции
+`20260927120000_price_sources` вместо `source` лежат `appliedRuleId`/`ruleName` скрытых
+правил цены — раздел удалён, строки не переписываются.
 Миграция `20260924120000_pricing` цены покупателей **не меняла**: старый `listings.price`
 остался розницей, а `costPrice = FLOOR(price / 1.2)` — именно FLOOR, тогда движок при наценке
 20% и шаге 100 тийинов возвращает ровно прежнюю цену (для цен в целых сумах). Заказы до неё
 получили `costPrice = price`, маржи у них нет — выплаты по ним прошли по старой цене.
 
-**Акции (`Promotion`) — второй этап движка**, поверх обычной розницы. Правила скрыты от
-покупателя, акция — видна: в мобилку уходят `price` (с акцией), `oldPrice` (зачёркнутая
-«было») и `promotion { id, title, description, endDate }`; процент на плашке клиент
-считает сам из `price`/`oldPrice`. Из акций листинга в окне дат берётся дающая
-наименьшую цену; скидка — от обычной розницы, округление вверх, пол `costPrice` — то есть
-**скидку оплачивает маржа платформы**, выплата продавцу не меняется. Если акционная цена
-упёрлась в себестоимость и не ниже обычной, акция **не применяется** (фейковое «было» с той
-же ценой запрещено). «Было» не вводится руками — это обычная розница из движка. Инвариант
+**Акции (`Promotion`)** видны покупателю: в мобилку уходят `price` (с акцией), `oldPrice`
+(зачёркнутая «было») и `promotion { id, title, description, endDate }`; процент на плашке
+клиент считает сам из `price`/`oldPrice`. У каждой позиции акции своя **фиксированная цена**
+`PromotionItem.promoPrice` (процентов у акции нет; процент для админки выводит
+`promotion.response.ts` из обычной розницы). Сохранение с ценой ниже `costPrice` → 400,
+движок дополнительно держит пол `costPrice` (продавец мог поднять себестоимость позже) и
+цену по акции не округляет — её ввёл админ. Из акций листинга в окне дат берётся дающая
+наименьшую цену — **скидку оплачивает маржа платформы**, выплата продавцу не меняется. Если
+цена по акции не ниже обычной, акция **не применяется** (фейковое «было» с той же ценой
+запрещено). «Было» не вводится руками — это обычная розница из движка. Инвариант
 на `Listing`: `onPromo ⇔ promotionId ≠ null ⇔ oldPrice ≠ null`; `onPromo` — отдельная
 NOT NULL колонка только ради `ORDER BY` (nullable-поле в orderBy ломает курсор Prisma).
 Витрина (`sort` = `newest`/без sort/`free_delivery`) ставит акционные первыми; `price_asc`/
@@ -421,13 +436,13 @@ NOT NULL колонка только ради `ORDER BY` (nullable-поле в o
 видит (ни в листингах, ни в заказах). Снапшот в заказ дополнен `oldPrice`/`promotionId`/
 `promotionTitle` (RU) в `OrderItem.pricing`.
 
-**Даты — с точностью до дня.** У правил и акций админ выбирает первый и последний день
+**Даты — с точностью до дня.** У акций админ выбирает первый и последний день
 (`startDate`/`endDate`, `YYYY-MM-DD`, включительно) — API в днях, в БД `startsAt`/`endsAt`
 ровно 00:00 по Ташкенту (UTC+5, `src/pricing/business-day.ts`), `endsAt` исключающая
 (полночь после последнего дня). **Полуночный тикер** (`PricingScheduler`): при старте —
 полный `recalculate({})` (ловит полночь, пропущенную при даунтайме/редеплое), дальше
 `setTimeout` до следующей полуночи по Ташкенту (переставляется после каждого срабатывания,
-без дрейфа `setInterval`) пересчитывает листинги правил/акций, чья граница попала в
+без дрейфа `setInterval`) пересчитывает листинги акций, чья граница попала в
 `(прошлый запуск, сейчас]`, и делает `bump`. Итог: по датам цена меняется только в 00:00;
 правки из админки применяются сразу. Реплика одна (`numReplicas: 1`) — распределённого
 лока нет; при масштабировании тикер надо выносить.
@@ -862,16 +877,23 @@ Buckets приватные и публичных URL не дают, а ссыл�
   владельцу; заблокировавший бота сотрудник не мешает доставке остальным; сотрудник без
   привязки просто пропускается; рядовой сотрудник получает 403 на `…/staff`, владелец чужого
   продавца — тоже; владельца удалить нельзя (400).
-- ценообразование: листинг с `costPrice` 1 000 000 при наценке 20% → `price` 1 200 000; ни в
-  одном ответе `/mobile/*` (листинги, корзина, избранное, заказы) нет `costPrice`; `SELLER` в
-  `/admin/listings` и `/admin/orders` не видит розницы; смена `markupBps` в настройках сразу
-  пересчитывает витрину; `PriceRule` со скидкой больше наценки не опускает цену ниже `costPrice`.
-- акции: акция −20% на листинг с розницей 1 200 000 → `price` 960 000, `oldPrice` 1 200 000,
-  `promotion.title` на языке `Accept-Language`; скидка, упёршаяся в `costPrice` без выигрыша,
-  даёт `promotion: null`; `sort=newest`/`free_delivery` — акционные первыми, курсор без
+- ценообразование: листинг с `costPrice` 1 000 000 при одной ступени 20% → `price` 1 200 000;
+  ступени `[0 → 60%, 50 000 сум → 40%]` при шаге 1 сум: себестоимость 49 999 сум → 79 999,
+  50 000 и 51 000 → 80 000 (полка), 60 000 → 84 000; ни в одном ответе `/mobile/*` (листинги, корзина,
+  избранное, заказы) нет `costPrice`; `SELLER` в `/admin/listings` и `/admin/orders` не видит
+  розницы и `customMarkupBps`, а его `PATCH` с `customMarkupBps` → 403; смена ступеней в
+  настройках и порядка в `admin/price-priorities` сразу пересчитывает витрину; `PUT` с
+  `BASE_MARKUP` не последним → 400.
+- акции: позиция с розницей 1 200 000 и `promoPrice` 960 000 → `price` 960 000, `oldPrice`
+  1 200 000, `promotion.title` на языке `Accept-Language`; `promoPrice` ниже `costPrice` → 400,
+  не ниже обычной розницы → `promotion: null`; своя наценка выше акций в приоритетах → у
+  листинга со своей наценкой акции нет, у остальных есть; `sort=newest`/`free_delivery` — акционные первыми, курсор без
   дублей; `price_asc`/`price_desc` — строго по цене; корзина отдаёт `savings`; `SELLER` в
   `/admin/listings` не видит `oldPrice`/`promotion`; акция с `startDate` = завтра включается в
   00:00 по Ташкенту сама (в БД `startsAt` = `…T19:00:00Z` предыдущего дня по UTC).
+- новинки: `GET /mobile/listings` без параметров отдаёт то же, что и раньше;
+  `?createdWithinDays=7` — только `createdAt >= now − 7д`, акционные первыми, курсор без дублей;
+  `createdWithinDays` = `0`/`91`/`abc` → 400; `/admin/listings?createdWithinDays=3` тоже фильтрует.
 - описания: `PATCH /admin/catalog/:id` (и `/admin/sellers/:id`) с RU-описанием
   `<p>ok</p><script>x</script><img src=x><a href="//e">link</a><h1>T</h1>` сохраняет
   `<p>ok</p>link<h2>T</h2>`; `<p></p>` сохраняется как `null`, а UZ/EN без описания получают

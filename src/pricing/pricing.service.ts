@@ -1,11 +1,20 @@
-import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import type { PlatformSettings, PriceRule } from '@prisma/client';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { Prisma, PriceSource } from '@prisma/client';
+import type { PlatformSettings } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CacheService } from '../cache/cache.service';
 import { SettingsService } from '../settings/settings.service';
-import { UpdatePlatformSettingsDto } from '../settings/dto/settings.dto';
-import { PriceConfig, PromotionCandidate, resolvePrice } from './price-engine';
+import {
+  MarkupTierDto,
+  UpdatePlatformSettingsDto,
+} from '../settings/dto/settings.dto';
+import {
+  DEFAULT_PRICE_ORDER,
+  MarkupTierInput,
+  PriceConfig,
+  PromotionCandidate,
+  resolvePrice,
+} from './price-engine';
 
 type Db = PrismaService | Prisma.TransactionClient;
 
@@ -13,31 +22,19 @@ type Db = PrismaService | Prisma.TransactionClient;
 // Пересчёт всей витрины (смена наценки) идёт кусками, а не одним findMany.
 const PAGE_SIZE = 1000;
 const UPDATE_CHUNK = 500;
+const MAX_TIERS = 20;
+
+/** Ответ admin/settings: синглтон настроек + ступени базовой наценки. */
+export type AdminSettingsResponse = PlatformSettings & {
+  markupTiers: MarkupTierInput[];
+};
 
 /**
- * Листинги, которых может коснуться правило: его область (listingId/sellerId/
- * catalogItemId/categoryId, И по заданным). Условия (даты, остаток) сюда не входят —
- * их проверяет движок, а пересчитать надо и тех, кто из-под правила выпал.
- */
-export function ruleScopeWhere(
-  rule: Pick<
-    PriceRule,
-    'listingId' | 'sellerId' | 'catalogItemId' | 'categoryId'
-  >,
-): Prisma.ListingWhereInput {
-  return {
-    id: rule.listingId ?? undefined,
-    sellerId: rule.sellerId ?? undefined,
-    catalogItemId: rule.catalogItemId ?? undefined,
-    catalogItem: rule.categoryId ? { categoryId: rule.categoryId } : undefined,
-  };
-}
-
-/**
- * Единственное место, которое пишет Listing.price (и oldPrice/promotionId/onPromo —
- * результат акции). Розница денормализована: считается при записи (листинг,
- * настройки, остаток, правила, акции, полночь для датированных), а не при чтении — поэтому
- * витрина сортирует и фильтрует по цене в БД, а кэш и мобилка её не замечают.
+ * Единственное место, которое пишет Listing.price (и oldPrice/promotionId/onPromo/
+ * priceSource — результат движка). Розница денормализована: считается при записи
+ * (листинг, настройки, ступени, приоритеты, акции, полночь для датированных), а не при
+ * чтении — поэтому витрина сортирует и фильтрует по цене в БД, а кэш и мобилка её не
+ * замечают.
  *
  * ⚠️ cache.bump() делает вызывающий и строго после коммита — как везде в проекте.
  */
@@ -49,26 +46,100 @@ export class PricingService {
     private readonly cache: CacheService,
   ) {}
 
+  async getSettings(): Promise<AdminSettingsResponse> {
+    const [settings, markupTiers] = await Promise.all([
+      this.settings.get(),
+      this.loadTiers(this.prisma),
+    ]);
+    return { ...settings, markupTiers };
+  }
+
   /**
-   * PATCH /admin/settings. Живёт здесь, а не в SettingsService: смена наценки или
-   * округления обязана пересчитать всю витрину, а SettingsModule не знает о
-   * ценообразовании (иначе цикл модулей).
+   * PATCH /admin/settings. Живёт здесь, а не в SettingsService: смена ступеней наценки
+   * или округления обязана пересчитать всю витрину, а SettingsModule не знает о
+   * ценообразовании (иначе цикл модулей). Ступени приходят набором и заменяют прежний
+   * целиком.
    */
   async updateSettings(
     dto: UpdatePlatformSettingsDto,
-  ): Promise<PlatformSettings> {
-    const updated = await this.settings.update(dto);
-    if (dto.markupBps !== undefined || dto.priceRoundingStep !== undefined) {
+  ): Promise<AdminSettingsResponse> {
+    const { markupTiers, ...rest } = dto;
+    if (markupTiers !== undefined) {
+      validateTiers(markupTiers);
+      await this.prisma.$transaction([
+        this.prisma.markupTier.deleteMany(),
+        this.prisma.markupTier.createMany({
+          data: markupTiers.map((t) => ({
+            minCost: t.minCost,
+            markupBps: t.markupBps,
+          })),
+        }),
+      ]);
+    }
+    await this.settings.update(rest);
+    if (markupTiers !== undefined || rest.priceRoundingStep !== undefined) {
       // Второй bump обязателен: между первым (в settings.update) и концом пересчёта
       // витрина успела бы закэшироваться со старыми ценами.
       if ((await this.recalculate({})) > 0) await this.cache.bump();
     }
-    return updated;
+    return this.getSettings();
   }
 
-  async config(): Promise<PriceConfig> {
-    const s = await this.settings.get();
-    return { markupBps: s.markupBps, roundingStep: s.priceRoundingStep };
+  /** Порядок источников цены: первый подходящий сверху даёт цену. */
+  async getPriorities(db: Db = this.prisma): Promise<PriceSource[]> {
+    const rows = await db.pricePriority.findMany({
+      orderBy: { position: 'asc' },
+    });
+    // Строк нет или не все (БД без сида миграции) — порядок по умолчанию.
+    if (rows.length !== DEFAULT_PRICE_ORDER.length) return DEFAULT_PRICE_ORDER;
+    return rows.map((r) => r.source);
+  }
+
+  /**
+   * PUT /admin/price-priorities: новый порядок целиком. Базовая наценка подходит
+   * любому листингу, поэтому обязана быть последней — всё под ней не сработало бы
+   * никогда. Меняет цену всей витрины, поэтому полный пересчёт.
+   */
+  async setPriorities(order: PriceSource[]): Promise<PriceSource[]> {
+    const all = new Set<PriceSource>(DEFAULT_PRICE_ORDER);
+    if (
+      order.length !== all.size ||
+      new Set(order).size !== all.size ||
+      order.some((s) => !all.has(s))
+    ) {
+      throw new BadRequestException(
+        'Порядок должен содержать каждый источник цены ровно один раз',
+      );
+    }
+    if (order[order.length - 1] !== PriceSource.BASE_MARKUP) {
+      throw new BadRequestException('Базовая наценка должна быть последней');
+    }
+    await this.prisma.$transaction(async (tx) => {
+      // position уникален: построчный update упёрся бы в unique посередине
+      // перестановки, поэтому три строки просто пишутся заново.
+      await tx.pricePriority.deleteMany();
+      await tx.pricePriority.createMany({
+        data: order.map((source, position) => ({ source, position })),
+      });
+    });
+    if ((await this.recalculate({})) > 0) await this.cache.bump();
+    return this.getPriorities();
+  }
+
+  async config(db: Db = this.prisma): Promise<PriceConfig> {
+    const [s, markupTiers, order] = await Promise.all([
+      this.settings.get(),
+      this.loadTiers(db),
+      this.getPriorities(db),
+    ]);
+    return { markupTiers, roundingStep: s.priceRoundingStep, order };
+  }
+
+  private async loadTiers(db: Db): Promise<MarkupTierInput[]> {
+    return db.markupTier.findMany({
+      select: { minCost: true, markupBps: true },
+      orderBy: { minCost: 'asc' },
+    });
   }
 
   /**
@@ -82,9 +153,8 @@ export class PricingService {
   ): Promise<number> {
     const db: Db = tx ?? this.prisma;
     const now = new Date();
-    const [config, rules, promotions] = await Promise.all([
-      this.config(),
-      db.priceRule.findMany({ where: { enabled: true } }),
+    const [config, promotions] = await Promise.all([
+      this.config(db),
       this.loadPromotions(db, now),
     ]);
 
@@ -95,15 +165,12 @@ export class PricingService {
         where,
         select: {
           id: true,
-          sellerId: true,
-          catalogItemId: true,
           costPrice: true,
-          stock: true,
+          customMarkupBps: true,
           price: true,
-          appliedRuleId: true,
+          priceSource: true,
           oldPrice: true,
           promotionId: true,
-          catalogItem: { select: { categoryId: true } },
         },
         orderBy: { id: 'asc' },
         cursor: cursor ? { id: cursor } : undefined,
@@ -114,21 +181,13 @@ export class PricingService {
 
       const updates = page.flatMap((l) => {
         const resolved = resolvePrice(
-          {
-            listingId: l.id,
-            sellerId: l.sellerId,
-            catalogItemId: l.catalogItemId,
-            categoryId: l.catalogItem.categoryId,
-            costPrice: l.costPrice,
-            stock: l.stock,
-          },
+          { costPrice: l.costPrice, customMarkupBps: l.customMarkupBps },
           config,
-          rules,
           promotions.get(l.id) ?? [],
           now,
         );
         return resolved.price === l.price &&
-          resolved.appliedRuleId === l.appliedRuleId &&
+          resolved.source === l.priceSource &&
           resolved.oldPrice === l.oldPrice &&
           resolved.promotionId === l.promotionId
           ? []
@@ -140,16 +199,16 @@ export class PricingService {
         await db.$executeRaw`
           UPDATE "listings" AS l
           SET "price" = v.price,
-              "appliedRuleId" = v.rule_id,
+              "priceSource" = v.source::"PriceSource",
               "oldPrice" = v.old_price,
               "promotionId" = v.promotion_id,
               "onPromo" = v.promotion_id IS NOT NULL
           FROM (VALUES ${Prisma.join(
             chunk.map(
               (u) =>
-                Prisma.sql`(${u.id}::text, ${u.price}::int, ${u.appliedRuleId}::text, ${u.oldPrice}::int, ${u.promotionId}::text)`,
+                Prisma.sql`(${u.id}::text, ${u.price}::int, ${u.source}::text, ${u.oldPrice}::int, ${u.promotionId}::text)`,
             ),
-          )}) AS v(id, price, rule_id, old_price, promotion_id)
+          )}) AS v(id, price, source, old_price, promotion_id)
           WHERE l.id = v.id
         `;
       }
@@ -179,10 +238,8 @@ export class PricingService {
       },
       select: {
         listingId: true,
-        discountBps: true,
-        promotion: {
-          select: { id: true, discountBps: true, startsAt: true, endsAt: true },
-        },
+        promoPrice: true,
+        promotion: { select: { id: true, startsAt: true, endsAt: true } },
       },
     });
     const byListing = new Map<string, PromotionCandidate[]>();
@@ -190,12 +247,34 @@ export class PricingService {
       const list = byListing.get(item.listingId) ?? [];
       list.push({
         promotionId: item.promotion.id,
-        discountBps: item.discountBps ?? item.promotion.discountBps,
+        promoPrice: item.promoPrice,
         startsAt: item.promotion.startsAt,
         endsAt: item.promotion.endsAt,
       });
       byListing.set(item.listingId, list);
     }
     return byListing;
+  }
+}
+
+/**
+ * Ступени базовой наценки: 1..MAX_TIERS, первая — с нуля (иначе дешёвым позициям не
+ * досталось бы наценки), границы строго по возрастанию.
+ */
+function validateTiers(tiers: MarkupTierDto[]): void {
+  if (tiers.length === 0 || tiers.length > MAX_TIERS) {
+    throw new BadRequestException(`Ступеней наценки — от 1 до ${MAX_TIERS}`);
+  }
+  if (tiers[0].minCost !== 0) {
+    throw new BadRequestException(
+      'Первая ступень наценки должна начинаться с 0',
+    );
+  }
+  for (let i = 1; i < tiers.length; i++) {
+    if (tiers[i].minCost <= tiers[i - 1].minCost) {
+      throw new BadRequestException(
+        'Границы ступеней наценки должны идти по возрастанию',
+      );
+    }
   }
 }

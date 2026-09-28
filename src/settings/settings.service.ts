@@ -39,7 +39,10 @@ export class SettingsService {
     });
   }
 
-  async update(dto: UpdatePlatformSettingsDto): Promise<PlatformSettings> {
+  // Ступени наценки (markupTiers) — отдельная таблица, их пишет PricingService.
+  async update(
+    dto: Omit<UpdatePlatformSettingsDto, 'markupTiers'>,
+  ): Promise<PlatformSettings> {
     const updated = await this.prisma.platformSettings.upsert({
       where: { id: SETTINGS_ID },
       create: { id: SETTINGS_ID, ...dto },

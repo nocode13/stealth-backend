@@ -29,7 +29,7 @@ import { AdminAppVersionsController } from './admin-app-versions.controller';
 import { AdminBroadcastsController } from './admin-broadcasts.controller';
 import { AdminCustomersController } from './admin-customers.controller';
 import { AdminPromotionsController } from './admin-promotions.controller';
-import { AdminPriceRulesController } from './admin-price-rules.controller';
+import { AdminPricePrioritiesController } from './admin-price-priorities.controller';
 
 // API-поверхность админки. Логика — в доменных модулях, тут только контроллеры
 // с session-guard'ами и Swagger-тегами.
@@ -67,7 +67,7 @@ import { AdminPriceRulesController } from './admin-price-rules.controller';
     AdminBroadcastsController,
     AdminCustomersController,
     AdminPromotionsController,
-    AdminPriceRulesController,
+    AdminPricePrioritiesController,
   ],
 })
 export class AdminModule {}

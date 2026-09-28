@@ -1,4 +1,10 @@
-import { Locale, ListingStatus, Prisma, Role } from '@prisma/client';
+import {
+  Locale,
+  ListingStatus,
+  PriceSource,
+  Prisma,
+  Role,
+} from '@prisma/client';
 import { pickTranslation } from '../i18n/pick';
 import {
   CatalogItemResponse,
@@ -23,11 +29,6 @@ export type ListingWithTranslations = Prisma.ListingGetPayload<{
     promotion: { include: { translations: true } };
   };
 }>;
-
-export type AdminListingWithTranslations = ListingWithTranslations &
-  Prisma.ListingGetPayload<{
-    include: { appliedRule: { select: { id: true; name: true } } };
-  }>;
 
 // Контракт мобилки: `price` — розница, которую платит покупатель (с акцией, если
 // она есть), `oldPrice` — зачёркнутая «было» (null — не на акции). ⚠️ costPrice сюда
@@ -72,9 +73,9 @@ export const toListingResponse = (
 });
 
 /**
- * Листинг для админки. costPrice видят все, розницу и сработавшее правило — только
- * SUPER_ADMIN: продавец знает лишь свою цену и сумму к выплате, наценку платформы
- * он не видит.
+ * Листинг для админки. costPrice видят все, розницу, источник цены и свою наценку —
+ * только SUPER_ADMIN: продавец знает лишь свою цену и сумму к выплате, наценку
+ * платформы он не видит.
  */
 export type AdminListingResponse = Omit<
   ListingResponse,
@@ -83,8 +84,10 @@ export type AdminListingResponse = Omit<
   costPrice: number;
   /** Только SUPER_ADMIN. */
   price?: number;
-  /** Только SUPER_ADMIN; null — базовая наценка из настроек платформы. */
-  appliedRule?: { id: string; name: string } | null;
+  /** Только SUPER_ADMIN; своя наценка, bps; null — базовая ступенчатая. */
+  customMarkupBps?: number | null;
+  /** Только SUPER_ADMIN; какой источник дал текущую price. */
+  priceSource?: PriceSource;
   /** Только SUPER_ADMIN; розница без акции, null — не на акции. */
   oldPrice?: number | null;
   /** Только SUPER_ADMIN; акция, давшая текущую price. */
@@ -92,7 +95,7 @@ export type AdminListingResponse = Omit<
 };
 
 export const toAdminListingResponse = (
-  l: AdminListingWithTranslations,
+  l: ListingWithTranslations,
   locale: Locale,
   role: Role,
 ): AdminListingResponse => {
@@ -102,7 +105,8 @@ export const toAdminListingResponse = (
     ...base,
     costPrice: l.costPrice,
     price,
-    appliedRule: l.appliedRule,
+    customMarkupBps: l.customMarkupBps,
+    priceSource: l.priceSource,
     oldPrice,
     promotion: promotion ? { id: promotion.id, title: promotion.title } : null,
   };
