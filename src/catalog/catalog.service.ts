@@ -2,19 +2,19 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
   Locale,
   MediaStatus,
-  MediaType,
   Prisma,
   ReviewStatus,
   Role,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { MediaGalleryService } from '../storage/media-gallery.service';
+import type { Express } from 'express';
 import type { AuthUser } from '../common/decorators/current-user.decorator';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CategoriesService } from '../categories/categories.service';
@@ -37,8 +37,6 @@ import {
   FindCatalogQueryDto,
   UpdateCatalogItemDto,
 } from './dto/catalog.dto';
-
-const MAX_MEDIA_PER_ITEM = 10;
 
 // Админский include: медиа целиком, вместе с PROCESSING и FAILED — админка обязана
 // показывать, что видео ещё обрабатывается или не обработалось.
@@ -66,14 +64,13 @@ export const withCategoryPublic = {
 
 @Injectable()
 export class CatalogService {
-  private readonly logger = new Logger(CatalogService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly categories: CategoriesService,
     private readonly countries: CountriesService,
     private readonly storage: StorageService,
     private readonly cache: CacheService,
+    private readonly gallery: MediaGalleryService,
   ) {}
 
   // В БД media.url/posterUrl хранят ключ S3-объекта — здесь собираем полный URL для
@@ -298,27 +295,15 @@ export class CatalogService {
     return item;
   }
 
-  // Фото приходит уже готовым (webp), видео — ссылкой на оригинал со статусом
-  // PROCESSING: mp4 и обложку дорисует MediaProcessingService.
+  // Галерея общая с листингами (MediaGalleryService) — здесь только владение.
   async addMedia(
     id: string,
-    data: { url: string; type: MediaType; status: MediaStatus },
+    file: Express.Multer.File,
     user: AuthUser,
-  ): Promise<{ item: AdminCatalogItemResponse; mediaId: string }> {
-    const item = await this.assertOwned(id, user);
-    if (item.media.length >= MAX_MEDIA_PER_ITEM) {
-      throw new ForbiddenException(
-        `Не больше ${MAX_MEDIA_PER_ITEM} медиафайлов на позицию`,
-      );
-    }
-    const nextSortOrder = item.media.length
-      ? Math.max(...item.media.map((m) => m.sortOrder)) + 1
-      : 0;
-    const created = await this.prisma.catalogItemMedia.create({
-      data: { catalogItemId: id, ...data, sortOrder: nextSortOrder },
-    });
-    await this.cache.bump();
-    return { item: await this.findOne(id), mediaId: created.id };
+  ): Promise<AdminCatalogItemResponse> {
+    await this.assertOwned(id, user);
+    await this.gallery.add({ catalogItemId: id }, file);
+    return this.findOne(id);
   }
 
   async removeMedia(
@@ -326,26 +311,8 @@ export class CatalogService {
     mediaId: string,
     user: AuthUser,
   ): Promise<AdminCatalogItemResponse> {
-    // Только проверка владения/существования — media() отсюда не используется:
-    // findOne() (через assertOwned) отдаёт уже собранные URL, а для удаления объекта
-    // в S3 нужен именно ключ, поэтому он берётся отдельным запросом ниже.
     await this.assertOwned(id, user);
-    const media = await this.prisma.catalogItemMedia.findFirst({
-      where: { id: mediaId, catalogItemId: id },
-    });
-    if (!media) throw new NotFoundException('Медиафайл не найден');
-
-    // У видео объектов в бакете два: сам файл и обложка (у PROCESSING в url лежит
-    // ещё не обработанный оригинал — его тоже надо убрать).
-    for (const key of [media.url, media.posterUrl]) {
-      if (!key) continue;
-      this.storage.delete(key).catch((e: unknown) => {
-        this.logger.warn(`Не удалось удалить объект ${key}`, e);
-      });
-    }
-
-    await this.prisma.catalogItemMedia.delete({ where: { id: mediaId } });
-    await this.cache.bump();
+    await this.gallery.remove({ catalogItemId: id }, mediaId);
     return this.findOne(id);
   }
 
@@ -355,29 +322,8 @@ export class CatalogService {
     direction: 'up' | 'down',
     user: AuthUser,
   ): Promise<AdminCatalogItemResponse> {
-    const item = await this.assertOwned(id, user);
-    const media = item.media; // уже отсортированы по sortOrder
-    const index = media.findIndex((m) => m.id === mediaId);
-    if (index === -1) throw new NotFoundException('Медиафайл не найден');
-
-    const swapWith = direction === 'up' ? index - 1 : index + 1;
-    if (swapWith < 0 || swapWith >= media.length) {
-      return this.withUrls(toAdminCatalogItemResponse(item));
-    }
-
-    const a = media[index];
-    const b = media[swapWith];
-    await this.prisma.$transaction([
-      this.prisma.catalogItemMedia.update({
-        where: { id: a.id },
-        data: { sortOrder: b.sortOrder },
-      }),
-      this.prisma.catalogItemMedia.update({
-        where: { id: b.id },
-        data: { sortOrder: a.sortOrder },
-      }),
-    ]);
-    await this.cache.bump();
+    await this.assertOwned(id, user);
+    await this.gallery.reorder({ catalogItemId: id }, mediaId, direction);
     return this.findOne(id);
   }
 

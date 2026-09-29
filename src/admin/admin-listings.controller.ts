@@ -9,10 +9,20 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ApiBody,
+  ApiConsumes,
+  ApiCookieAuth,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Role } from '@prisma/client';
+import type { Express } from 'express';
 import { AuthenticatedGuard } from '../auth/guards/authenticated.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -24,6 +34,12 @@ import {
   FindListingsQueryDto,
   UpdateListingDto,
 } from '../listings/dto/listing.dto';
+import { ReorderCatalogMediaDto } from '../catalog/dto/catalog.dto';
+import {
+  assertMediaFile,
+  imageUploadBody,
+  mediaUploadOptions,
+} from './upload.options';
 
 // Управление листингами продавца. Продавец работает только со своими и видит только
 // себестоимость — розница и наценка в ответе есть лишь у SUPER_ADMIN.
@@ -92,5 +108,51 @@ export class AdminListingsController {
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.listings.remove(id, this.scope(user));
+  }
+
+  // Своя галерея варианта — тот же пайплайн, что у каталога (MediaGalleryService).
+  // Пустая галерея — на витрине фото позиции каталога.
+  @Post(':id/media')
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary:
+      'Добавить фото или видео в галерею варианта (видео уходит в фоновую обработку)',
+  })
+  @ApiBody(imageUploadBody)
+  @UseInterceptors(FileInterceptor('file', mediaUploadOptions))
+  addMedia(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    assertMediaFile(file);
+    return this.listings.addMedia(id, this.scope(user), file, user.role);
+  }
+
+  @Delete(':id/media/:mediaId')
+  @ApiOperation({ summary: 'Удалить медиафайл из галереи варианта' })
+  removeMedia(
+    @Param('id') id: string,
+    @Param('mediaId') mediaId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.listings.removeMedia(id, this.scope(user), mediaId, user.role);
+  }
+
+  @Patch(':id/media/:mediaId/reorder')
+  @ApiOperation({ summary: 'Сдвинуть медиафайл в галерее варианта вверх/вниз' })
+  reorderMedia(
+    @Param('id') id: string,
+    @Param('mediaId') mediaId: string,
+    @Body() dto: ReorderCatalogMediaDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.listings.reorderMedia(
+      id,
+      this.scope(user),
+      mediaId,
+      dto.direction,
+      user.role,
+    );
   }
 }

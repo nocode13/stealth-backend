@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import type { MulterOptions } from '@nestjs/platform-express/multer/interfaces/multer-options.interface';
 import type { ApiBodyOptions } from '@nestjs/swagger';
+import type { Express } from 'express';
 
 export const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 export const MAX_VIDEO_SIZE = 50 * 1024 * 1024;
@@ -40,6 +41,17 @@ export const mediaUploadOptions: MulterOptions = {
     callback(null, true);
   },
 };
+
+// Проверка файла галереи (каталог и листинг): multer пропускает до MAX_VIDEO_SIZE,
+// фото режем отдельно. Настоящая проверка формата — по содержимому, дальше.
+export function assertMediaFile(
+  file: Express.Multer.File | undefined,
+): asserts file is Express.Multer.File {
+  if (!file) throw new BadRequestException('Файл не передан');
+  if (!file.mimetype.startsWith('video/') && file.size > MAX_IMAGE_SIZE) {
+    throw new BadRequestException('Фото больше 5 МБ');
+  }
+}
 
 // Swagger сам по себе поле файла для multipart не показывает — нужна явная схема.
 export const imageUploadBody: ApiBodyOptions = {
