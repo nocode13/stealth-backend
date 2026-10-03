@@ -5,8 +5,9 @@ import {
   PartialType,
 } from '@nestjs/swagger';
 import { ListingStatus } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEnum,
   IsInt,
   IsNumber,
@@ -70,6 +71,49 @@ export class CreateListingDto {
   @Max(100000)
   customMarkupBps?: number | null;
 
+  // Атрибуты варианта (src/listings/variant.ts). Набор атрибутов уникален в
+  // пределах продавца и позиции каталога — дубль даёт 409.
+  @ApiPropertyOptional({ default: false, description: 'Росток' })
+  @IsOptional()
+  @IsBoolean()
+  seedling?: boolean;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Объём горшка, мл (0,5 л = 500); null — не указан',
+    example: 3000,
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsInt()
+  @Min(1)
+  @Max(1000000)
+  potVolumeMl?: number | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Количество стеблей; null — не указано',
+    example: 5,
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsInt()
+  @Min(1)
+  @Max(10000)
+  stemCount?: number | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Высота, см; null — не указана',
+    example: 60,
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsInt()
+  @Min(1)
+  @Max(10000)
+  heightCm?: number | null;
+
   // SELLER всегда создаёт листинг себе (поле игнорируется), SUPER_ADMIN не привязан
   // к продавцу и обязан указать его явно.
   @ApiPropertyOptional({
@@ -81,7 +125,7 @@ export class CreateListingDto {
 }
 
 // sellerId в PATCH намеренно нет: перенос листинга между продавцами ломает
-// уникальность [sellerId, catalogItemId] и скоуп видимости.
+// уникальность варианта и скоуп видимости.
 export class UpdateListingDto extends PartialType(
   OmitType(CreateListingDto, ['sellerId'] as const),
 ) {}
@@ -145,6 +189,13 @@ export class FindListingsQueryDto extends CursorPaginationDto {
   @IsOptional()
   @IsEnum(ListingSort)
   sort?: ListingSort;
+
+  // Фильтр «Только ростки». false/отсутствие — без фильтра (не «только не ростки»).
+  @ApiPropertyOptional({ description: 'true — только ростки' })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  seedling?: boolean;
 
   // Секция «Новинки недели» в мобилке. Опционален: без него выдача прежняя — уже
   // выпущенные сборки его не шлют. Число дней, а не дата: ключ кэша витрины стабилен.

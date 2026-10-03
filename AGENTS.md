@@ -115,15 +115,20 @@ src/
 - **Listing** — предложение продавца поверх позиции: `costPrice` (себестоимость, вводит
   продавец), `price` (розница, **денормализованный результат движка**, руками не пишется —
   см. «Ценообразование»), `customMarkupBps?` (своя наценка, ставит только `SUPER_ADMIN`),
-  `priceSource` и `oldPrice?`/`promotionId?`/`onPromo` (результат движка, пишет только он), `stock`, `status` (`DRAFT|ACTIVE|ARCHIVED`),
-  `@@unique([sellerId, catalogItemId])`. При создании `CatalogService.assertUsable`
-  проверяет, что позиция одобрена и видна этому продавцу. `code` — **артикул**: unique `Int`
-  из своей последовательности с 10001 (миграция `listing_code`), руками не пишется.
-  Показывается как `#10001`, идёт в короткую ссылку `app.egen.uz/l/<code>`.
-  `GET /mobile/listings/:id` принимает и cuid, и артикул (чисто цифровой параметр — всегда
-  артикул, cuid начинается с буквы); `search` вида `10001`/`#10001` (4–7 цифр,
-  `src/listings/listing-code.ts`) ищет точно по `code` вместо fuzzy по названию — и в витрине,
-  и в `admin/listings`.
+  `priceSource` и `oldPrice?`/`promotionId?`/`onPromo` (результат движка, пишет только он), `stock`, `status` (`DRAFT|ACTIVE|ARCHIVED`).
+  При создании `CatalogService.assertUsable` проверяет, что позиция одобрена и видна этому
+  продавцу. **Листинг — вариант товара**: у продавца по одной позиции их может быть
+  несколько, различаются атрибутами `seedling` (росток), `potVolumeMl` (горшок, мл),
+  `stemCount`, `heightCm` — набор знает только `src/listings/variant.ts`. Уникальность
+  набора в пределах `[sellerId, catalogItemId]` проверяет `ListingsService.assertVariantFree`
+  (409), а не индекс: NULL в Postgres-unique различны. Своя галерея варианта (`media`)
+  **заменяет** галерею каталога, пустая — показывается каталог (см. «Фото»).
+  `code` — **артикул**: unique `Int` из своей последовательности с 10001 (миграция
+  `listing_code`), руками не пишется. Показывается как `#10001`, идёт в короткую ссылку
+  `app.egen.uz/l/<code>`; у каждого варианта свой. `GET /mobile/listings/:id` принимает и
+  cuid, и артикул (чисто цифровой параметр — всегда артикул, cuid начинается с буквы);
+  `search` вида `10001`/`#10001` (4–7 цифр, `src/listings/listing-code.ts`) ищет точно по
+  `code` вместо fuzzy по названию — и в витрине, и в `admin/listings`.
 - **MarkupTier** — ступень базовой наценки по себестоимости (`minCost` от, `markupBps`),
   правится набором через `admin/settings`. **PricePriority** — порядок источников цены
   (`PriceSource`: `PROMOTION`/`LISTING_MARKUP`/`BASE_MARKUP`), ровно три строки, как
@@ -224,6 +229,10 @@ rich-text редактора админки (tiptap), колонка по-пре
 преобразований (`description` мобилке, `translations[].description` админке); старый plain text
 перевела миграция `20260911120000_description_html`.
 
+`OrderItem.variant` — снапшот атрибутов варианта **сырыми** (`{ seedling, potVolumeMl,
+stemCount, heightCm }`, `null` у заказов до вариантов), без языка: подпись собирают клиенты.
+Сервер форматирует её только для ботов (`formatVariantRu`, `src/listings/variant.ts`).
+
 **`OrderItem` — снапшот сразу по всем локалям**, JSON вместо строки
 (`catalogItemName`/`unit: Json`, `src/i18n/localized-text.ts`: `toLocalizedText`/`pickText`).
 Причина: снапшот заказа обязан пережить смену языка пользователем, поэтому на момент
@@ -265,7 +274,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | `admin/categories` | SUPER_ADMIN, SELLER | CRUD + `PATCH /:id/status` — **только SUPER_ADMIN** (`@Roles` на хендлере перебивает класс); смена статуса запрещена (409), пока к категории привязана хотя бы одна позиция каталога |
 | `admin/countries` | SUPER_ADMIN | CRUD, `DELETE /:id` — 409, пока к стране привязана хотя бы одна позиция каталога. Платформенный справочник — нет ни `sellerId`, ни ревью, роль ровно одна |
 | `admin/catalog` | SUPER_ADMIN, SELLER | CR + `PATCH /:id` (без `DELETE /:id` — удаления нет, только статус; смена статуса запрещена 409, пока по позиции есть хотя бы один листинг), `POST /:id/media`, `DELETE /:id/media/:mediaId`, `PATCH /:id/media/:mediaId/reorder` |
-| `admin/listings` | SELLER, SUPER_ADMIN | CRUD, `sellerId` из пользователя |
+| `admin/listings` | SELLER, SUPER_ADMIN | CRUD, `sellerId` из пользователя; 409 на дубль варианта. `POST /:id/media`, `DELETE /:id/media/:mediaId`, `PATCH /:id/media/:mediaId/reorder` — своя галерея варианта; ответ несёт `ownMedia` (все статусы) |
 | `admin/orders` | SELLER, SUPER_ADMIN | `GET /` — группы (фильтр `status`, поиск по номеру группы/заказа/телефону/имени), `GET /:id` (`:id` — id группы), `PATCH /:orderId/status`, `PATCH /:orderId/courier` (`:orderId` — id заказа внутри группы) — **только `SUPER_ADMIN`** |
 | `admin/sellers` | SUPER_ADMIN | CRUD + `POST /:id/image` (баннер) |
 | `admin/sellers/:sellerId/staff` | SUPER_ADMIN, **владелец** | `GET /`, `POST /`, `PATCH /:staffId`, `DELETE /:staffId`, `POST /:staffId/telegram/invite`, `POST /:staffId/telegram/unlink` |
@@ -290,7 +299,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | Роут | Guard | Эндпоинты |
 |---|---|---|
 | `mobile/auth` | JwtAuthGuard на `me`/`logout`/`email/link/*` | `POST telegram/session`, `GET telegram/session/:nonce`, `POST telegram/miniapp`, `POST email/session`, `POST email/verify`, `POST email/link/session`, `POST email/link/verify`, `POST refresh`, `GET/PATCH me`, `POST logout` |
-| `mobile/listings`, `mobile/categories`, `mobile/countries`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query. `mobile/listings` дополнительно принимает `sort` (`newest`\|`price_asc`\|`price_desc`\|`free_delivery`) — опционален, без него — `createdAt desc`. Без sort, `newest` и `free_delivery` сначала отдают акционные (`onPromo`), ценовые сортировки — нет. `free_delivery` — затем позиции с `CatalogItem.freeDelivery`, внутри групп сначала дешёвые; фильтра по доставке нет намеренно (он прятал половину витрины). Опциональный `createdWithinDays` (1..90) — только листинги с `createdAt` за последние N дней, скользящее окно от текущего момента; сортировка при этом обычная. Нужен секции «Новинки недели» (мобилка шлёт `7`); без параметра выдача прежняя — старые сборки его не шлют. Тот же параметр принимает и `admin/listings`. `mobile/countries` отдаёт справочник целиком — фильтра видимости у стран нет |
+| `mobile/listings`, `mobile/categories`, `mobile/countries`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query. Листинги отдаются **плоским** контрактом (см. «Контракт листинга для мобилки»); `seedling=true` — только ростки (`false`/нет параметра — без фильтра). `mobile/listings` дополнительно принимает `sort` (`newest`\|`price_asc`\|`price_desc`\|`free_delivery`) — опционален, без него — `createdAt desc`. Без sort, `newest` и `free_delivery` сначала отдают акционные (`onPromo`), ценовые сортировки — нет. `free_delivery` — затем позиции с `CatalogItem.freeDelivery`, внутри групп сначала дешёвые; фильтра по доставке нет намеренно (он прятал половину витрины). Опциональный `createdWithinDays` (1..90) — только листинги с `createdAt` за последние N дней, скользящее окно от текущего момента; сортировка при этом обычная. Нужен секции «Новинки недели» (мобилка шлёт `7`); без параметра выдача прежняя — старые сборки его не шлют. Тот же параметр принимает и `admin/listings`. `mobile/countries` отдаёт справочник целиком — фильтра видимости у стран нет |
 | `mobile/catalog` | JwtAuthGuard | `GET /` — ⚠️ асимметрия: остальная витрина публичная |
 | `mobile/cart` | JwtAuthGuard | `GET /`, `POST items`, `PATCH/DELETE items/:id`, `DELETE /` |
 | `mobile/favorites` | JwtAuthGuard | `GET /` — `CursorPage<ListingResponse>`, `GET /ids` — `{ listingIds }`, `PUT /:listingId`, `DELETE /:listingId` |
@@ -787,6 +796,32 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 цене есть композитный индекс `@@index([status, price])` (витрина всегда фильтрует
 `status: ACTIVE`).
 
+## Контракт листинга для мобилки
+
+`src/listings/mobile-listing.ts` — **единственное место**, где собирается листинг для
+мобилки: `mobileListingInclude` + мапперы `toListingCard` (списки: витрина, избранное),
+`toListingDetail` (`GET /mobile/listings/:id`) и `toCartListing` (корзина). `ListingsService`,
+`FavoritesService` и `CartService` своих include/мапперов не держат — новое поле добавляется
+здесь один раз.
+
+- Ответ **плоский**: артикул `code`, `name`/`unit`/`category { id, name }`/`country { code, name }`/
+  `freeDelivery` каталога лежат рядом с `price`/`oldPrice`/`stock` и атрибутами варианта
+  (`seedling`, `potVolumeMl`, `stemCount`, `heightCm` — сырыми, подпись собирает клиент).
+  Вложенного `catalogItem`, `sellerId`, `status`, `updatedAt` нет; вместо `status` —
+  `available` (`ACTIVE && stock > 0`, нужен избранному).
+- `media: { id, type, url, posterUrl }[]` — **итоговая** галерея: клиент не знает, фото это
+  варианта или каталога. Правило выбора — `resolveMedia` (`src/listings/listing-media.ts`),
+  им же пользуется обложка снапшота заказа (`coverUrl`).
+- `promotion` и `seller` — только в деталке (у корзины есть `promotion` и `sellerId` — чекаут
+  считает продавцов). HTML-`description` остаётся в карточке: его показывает лента reels,
+  которая листает витрину. Деталка несёт `variants` — все доступные варианты той же позиции
+  у того же продавца, включая текущий, в порядке `VARIANT_ORDER_BY`.
+- Админка получает прежнюю вложенную форму (`listing.response.ts`, `adminListingInclude`)
+  плюс атрибуты и `ownMedia`.
+
+Контракт сломан на месте (раньше был вложенный `catalogItem`): бэкенд выкатывается вместе
+с OTA мобилки, после чего поднимается `minSupportedVersion`.
+
 ## Фото
 
 `imageUploadOptions` (`src/admin/upload.options.ts`) — общие multer-опции: memoryStorage,
@@ -811,11 +846,18 @@ Redis-кэш переживает редеплой, и без гварда зн�
 (Catalog/Listings/Cart/Sellers) и в мэппере заказов (`order.response.ts`), не в
 контроллерах — контроллеры отдают то, что вернул сервис, без собственной логики.
 
-**Галерея каталога:** `CatalogItemImage` (`url`, `sortOrder`, каскад от `CatalogItem`), максимум
-10 фото, всегда `orderBy sortOrder asc`. Reorder — обмен `sortOrder` с соседом
-(`direction: 'up'|'down'`) в транзакции; удаление сначала гасит объект в S3 (fire-and-forget,
-ошибка логируется), потом строку. Обложка (`images[0].url`) копируется в
-`OrderItem.catalogItemImageUrl`. `SELLER` грузит фото только для своих позиций. Баннер
+**Галерея каталога и варианта:** одна таблица `CatalogItemMedia` (`catalog_item_media`),
+владелец ровно один — `catalogItemId` **или** `listingId` (CHECK в миграции
+`20260929120000_listing_variants`; каскад от владельца). Одна таблица — чтобы видео-воркер
+(`MediaProcessingService`) работал по `id`, не зная, чья галерея. Вся логика галереи —
+`MediaGalleryService` (`src/storage/media-gallery.service.ts`, владелец — `MediaOwner`):
+максимум 10 файлов, всегда `orderBy sortOrder asc`, reorder — обмен `sortOrder` с соседом
+(`direction: 'up'|'down'`) в транзакции, удаление сначала гасит объект в S3
+(fire-and-forget, ошибка логируется), потом строку. Владение проверяют доменные сервисы
+(`CatalogService`/`ListingsService`) до вызова; файл — `assertMediaFile`
+(`admin/upload.options.ts`). Удаление листинга гасит объекты его галереи в S3. Обложка
+(`coverUrl(resolveMedia(...))`) копируется в `OrderItem.catalogItemImageUrl`. `SELLER` грузит
+фото только для своих позиций и своих листингов. Баннер
 продавца (`POST /admin/sellers/:id/image` → `Seller.bannerUrl`) — тот же пайплайн.
 
 ## Деплой (Railway)
@@ -897,6 +939,13 @@ Buckets приватные и публичных URL не дают, а ссыл�
   дублей; `price_asc`/`price_desc` — строго по цене; корзина отдаёт `savings`; `SELLER` в
   `/admin/listings` не видит `oldPrice`/`promotion`; акция с `startDate` = завтра включается в
   00:00 по Ташкенту сама (в БД `startsAt` = `…T19:00:00Z` предыдущего дня по UTC).
+- варианты: два листинга одного продавца по одной позиции (росток / 3 л + 60 см) → оба 201,
+  третий с тем же набором → 409, тот же набор у другого продавца → 201; `?seedling=true` —
+  только ростки; у варианта со своей галереей `media` только свои, у варианта без неё — фото
+  каталога; `GET /mobile/listings/:id` → `variants` без `DRAFT`/`stock = 0`; в элементе
+  витрины нет `catalogItem`/`description`/`costPrice`/`sellerId`, у медиа только
+  `id/type/url/posterUrl`; чекаут пишет `order_items.variant`, в боте продавца строка
+  позиции с подписью варианта; удаление листинга сносит его медиа (строки и объекты S3).
 - артикул: `GET /mobile/listings/10001` и `GET /mobile/listings/<cuid>` того же листинга
   отдают одно и то же; `?search=10001` и `?search=%2310001` находят ровно его, `?search=роза`
   ищет по названию как раньше; у существующих листингов после миграции `code` ≥ 10001.

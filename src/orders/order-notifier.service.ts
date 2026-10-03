@@ -5,6 +5,7 @@ import {
   type Locale,
   type OrderGroup,
   type OrderStatus,
+  type Prisma,
 } from '@prisma/client';
 import { InlineKeyboard } from 'grammy';
 import { PrismaService } from '../prisma/prisma.service';
@@ -14,6 +15,7 @@ import { PushService } from '../push/push.service';
 import { DEFAULT_LOCALE } from '../i18n/locale';
 import { pickText } from '../i18n/localized-text';
 import { pickTranslation } from '../i18n/pick';
+import { formatVariantRu, variantFromSnapshot } from '../listings/variant';
 import type { OrderGroupWithOrders, OrderWithDetails } from './orders.service';
 import {
   ALLOWED_TRANSITIONS,
@@ -30,6 +32,16 @@ const money = (tiyin: number): string =>
 
 const escapeHtml = (text: string): string =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Кабинеты в ботах русскоязычные: название и подпись варианта — на DEFAULT_LOCALE.
+const itemTitle = (item: {
+  catalogItemName: Prisma.JsonValue;
+  variant: Prisma.JsonValue;
+}): string => {
+  const name = pickText(item.catalogItemName, DEFAULT_LOCALE);
+  const variant = formatVariantRu(variantFromSnapshot(item.variant));
+  return variant ? `${name} (${variant})` : name;
+};
 
 /**
  * Формирует и рассылает сообщения о заказах: продавцу — новый заказ и карточку
@@ -84,7 +96,7 @@ export class OrderNotifier {
       // Продавцу — только себестоимость: розницу и наценку платформы он не видит.
       ...order.items.map(
         (item) =>
-          `• ${escapeHtml(pickText(item.catalogItemName, DEFAULT_LOCALE))} — ${item.quantity} ${escapeHtml(
+          `• ${escapeHtml(itemTitle(item))} — ${item.quantity} ${escapeHtml(
             pickText(item.unit, DEFAULT_LOCALE),
           )} × ${money(item.costPrice)} = ${money(item.costTotal)}`,
       ),
@@ -164,7 +176,7 @@ export class OrderNotifier {
         `<b>${escapeHtml(pickTranslation(order.seller.translations, DEFAULT_LOCALE).name)}</b> — ${ORDER_STATUS_LABELS[order.status]}`,
         ...order.items.map(
           (item) =>
-            `• ${escapeHtml(pickText(item.catalogItemName, DEFAULT_LOCALE))} — ${item.quantity} ${escapeHtml(
+            `• ${escapeHtml(itemTitle(item))} — ${item.quantity} ${escapeHtml(
               pickText(item.unit, DEFAULT_LOCALE),
             )} × ${money(item.price)} = ${money(item.total)}`,
         ),

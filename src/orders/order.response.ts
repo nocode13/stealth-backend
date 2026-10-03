@@ -8,6 +8,7 @@ import type {
 import type { StorageService } from '../storage/storage.service';
 import { pickText } from '../i18n/localized-text';
 import { pickTranslation } from '../i18n/pick';
+import { VariantFields, variantFromSnapshot } from '../listings/variant';
 import type { OrderGroupWithOrders, OrderWithDetails } from './orders.service';
 
 // Prisma отдаёт сущность как есть, а её колонки — не то же самое, что API-контракт:
@@ -35,6 +36,8 @@ export interface OrderResponse {
     catalogItemName: string;
     catalogItemImageUrl: string | null;
     unit: string;
+    /** Сырые атрибуты варианта из снапшота; null — заказ до вариантов. */
+    variant: VariantFields | null;
     price: number;
     quantity: number;
     total: number;
@@ -101,6 +104,7 @@ export const toOrderResponse = (
     catalogItemName: pickText(item.catalogItemName, locale),
     catalogItemImageUrl: storage.getUrlOrNull(item.catalogItemImageUrl),
     unit: pickText(item.unit, locale),
+    variant: variantFromSnapshot(item.variant),
     price: item.price,
     quantity: item.quantity,
     total: item.total,

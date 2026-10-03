@@ -3,6 +3,7 @@ import { pickTranslation } from '../i18n/pick';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '../i18n/locale';
 import { toEndDay, toStartDay } from '../pricing/business-day';
 import type { PromotionState } from './dto/promotion.dto';
+import { VariantFields, pickVariant } from '../listings/variant';
 
 // ── Мобилка ──
 // Акция на листинге: только то, что нужно карточке/деталке. Процент скидки клиент
@@ -61,6 +62,10 @@ export const withAdminPromotionItems = {
           promotionId: true,
           stock: true,
           status: true,
+          seedling: true,
+          potVolumeMl: true,
+          stemCount: true,
+          heightCm: true,
           seller: { select: { translations: true } },
           catalogItem: { select: { translations: true } },
         },
@@ -103,7 +108,7 @@ export interface AdminPromotionItemResponse {
   promoPrice: number;
   /** Скидка от обычной розницы, bps; null — цена по акции не ниже обычной. */
   discountBps: number | null;
-  listing: {
+  listing: VariantFields & {
     id: string;
     name: string;
     sellerName: string;
@@ -192,6 +197,7 @@ export const toAdminPromotionDetailResponse = (
         item.listing.seller.translations,
         DEFAULT_LOCALE,
       ).name,
+      ...pickVariant(item.listing),
       costPrice: item.listing.costPrice,
       price: item.listing.price,
       oldPrice: item.listing.oldPrice,

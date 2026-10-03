@@ -4,30 +4,35 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import {
-  Locale,
-  ListingStatus,
-  MediaStatus,
-  Prisma,
-  Role,
-} from '@prisma/client';
+import { Locale, ListingStatus, Prisma, Role } from '@prisma/client';
+import type { Express } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CatalogService } from '../catalog/catalog.service';
 import { withMediaUrls } from '../catalog/catalog-media.util';
 import { CacheService } from '../cache/cache.service';
 import { StorageService } from '../storage/storage.service';
+import { MediaGalleryService } from '../storage/media-gallery.service';
 import { PricingService } from '../pricing/pricing.service';
-import type { CatalogItemResponse } from '../catalog/catalog.response';
 import { err } from '../i18n/api-error';
 import { DEFAULT_LOCALE } from '../i18n/locale';
 import { ERRORS } from '../i18n/messages';
 import {
   AdminListingResponse,
-  ListingResponse,
+  AdminListingRow,
+  adminListingInclude,
   toAdminListingResponse,
-  toListingResponse,
 } from './listing.response';
+import {
+  ListingCardResponse,
+  ListingDetailResponse,
+  listingVariantSelect,
+  mobileListingInclude,
+  toListingCard,
+  toListingDetail,
+  toListingVariant,
+} from './mobile-listing';
+import { VARIANT_ORDER_BY, VariantFields, pickVariant } from './variant';
 import {
   CreateListingDto,
   FindListingsQueryDto,
@@ -35,28 +40,6 @@ import {
   UpdateListingDto,
 } from './dto/listing.dto';
 import { isListingCode, parseListingCode } from './listing-code';
-
-// Витрина листингов ходит в каталог мимо CatalogService, поэтому фильтр «только
-// готовые медиа» повторяется здесь (см. withCategoryPublic): недотранскоденное
-// и упавшее видео покупателю показывать нельзя. Админский список листингов идёт
-// через тот же include — там медиа только для превью, а редактируется галерея
-// всё равно в каталоге.
-const withCatalog = {
-  catalogItem: {
-    include: {
-      translations: true,
-      category: { include: { translations: true } },
-      country: { include: { translations: true } },
-      media: {
-        where: { status: MediaStatus.READY },
-        orderBy: { sortOrder: 'asc' },
-      },
-    },
-  },
-  seller: { select: { id: true, translations: true } },
-  // Акция, давшая текущую price (название/текст в карточку). Пишет PricingService.
-  promotion: { include: { translations: true } },
-} satisfies Prisma.ListingInclude;
 
 // Порог word_similarity: 0 = что угодно совпадёт, 1 = точное совпадение.
 // 0.3 ловит опечатки/окончания, не превращая поиск в «покажи всё».
@@ -120,17 +103,21 @@ export class ListingsService {
     private readonly cache: CacheService,
     private readonly storage: StorageService,
     private readonly pricing: PricingService,
+    private readonly gallery: MediaGalleryService,
   ) {}
 
-  // catalogItem.media хранит ключи S3-объектов — здесь собираем полные URL для ответа.
-  // Кэш (findStorefront/findOnePublic) хранит сырые ключи: мэппинг применяется ПОСЛЕ
+  // media хранит ключи S3-объектов — здесь собираем полные URL для ответа. Кэш
+  // (findStorefront/findOnePublic) хранит сырые ключи: мэппинг применяется ПОСЛЕ
   // cache.wrap(), как и в CatalogService.
-  private withUrls<T extends { catalogItem: CatalogItemResponse }>(
-    listing: T,
-  ): T {
+  private withUrls<T extends ListingCardResponse>(listing: T): T {
+    return withMediaUrls(this.storage, listing);
+  }
+
+  private withAdminUrls(listing: AdminListingResponse): AdminListingResponse {
     return {
       ...listing,
       catalogItem: withMediaUrls(this.storage, listing.catalogItem),
+      ownMedia: withMediaUrls(this.storage, { media: listing.ownMedia }).media,
     };
   }
 
@@ -166,7 +153,7 @@ export class ListingsService {
   async findStorefront(
     query: FindListingsQueryDto,
     locale: Locale,
-  ): Promise<CursorPage<ListingResponse>> {
+  ): Promise<CursorPage<ListingCardResponse>> {
     // locale ОБЯЗАН быть в params: ключ кэша считается только по ним (см. И3).
     const page = await this.cache.wrap(
       'listings',
@@ -183,31 +170,33 @@ export class ListingsService {
             sellerId: query.sellerId,
             price: buildPriceFilter(query.minPrice, query.maxPrice),
             createdAt: buildCreatedSinceFilter(query.createdWithinDays),
+            seedling: query.seedling ? true : undefined,
             catalogItem: {
               categoryId: query.categoryId,
               countryId: query.countryId,
               id: catalogItemIds ? { in: catalogItemIds } : undefined,
             },
           },
-          include: withCatalog,
+          include: mobileListingInclude,
           orderBy: buildOrderBy(query.sort),
           cursor: query.cursor ? { id: query.cursor } : undefined,
           skip: query.cursor ? 1 : 0,
           take: query.limit + 1,
         });
-        const mapped = rows.map((l) => toListingResponse(l, locale));
+        const mapped = rows.map((l) => toListingCard(l, locale));
         return toCursorPage(mapped, query.limit);
       },
     );
     return { ...page, items: page.items.map((l) => this.withUrls(l)) };
   }
 
-  // Одно активное предложение для витрины мобилки (карточка товара). Принимает и
+  // Одно активное предложение для витрины мобилки (карточка товара) + все доступные
+  // варианты той же позиции у того же продавца (чипы «другие варианты»). Принимает и
   // cuid, и артикул: короткие ссылки app.egen.uz/l/<code> открывают ту же карточку.
   async findOnePublic(
     idOrCode: string,
     locale: Locale,
-  ): Promise<ListingResponse> {
+  ): Promise<ListingDetailResponse> {
     const listing = await this.cache.wrap(
       'listing',
       { id: idOrCode, locale },
@@ -220,11 +209,21 @@ export class ListingsService {
             status: ListingStatus.ACTIVE,
             stock: { gt: 0 },
           },
-          include: withCatalog,
+          include: mobileListingInclude,
         });
         // Промах в БД не кешируется: исключение из колбэка wrap пробрасывает как есть.
         if (!found) throw new NotFoundException(err(ERRORS.LISTING_NOT_FOUND));
-        return toListingResponse(found, locale);
+        const variants = await this.prisma.listing.findMany({
+          where: {
+            sellerId: found.sellerId,
+            catalogItemId: found.catalogItemId,
+            status: ListingStatus.ACTIVE,
+            stock: { gt: 0 },
+          },
+          select: listingVariantSelect,
+          orderBy: VARIANT_ORDER_BY,
+        });
+        return toListingDetail(found, variants.map(toListingVariant), locale);
       },
     );
     return this.withUrls(listing);
@@ -251,13 +250,14 @@ export class ListingsService {
           ? { price: priceFilter }
           : { costPrice: priceFilter }),
         createdAt: buildCreatedSinceFilter(query.createdWithinDays),
+        seedling: query.seedling ? true : undefined,
         catalogItem: {
           categoryId: query.categoryId,
           countryId: query.countryId,
           id: catalogItemIds ? { in: catalogItemIds } : undefined,
         },
       },
-      include: withCatalog,
+      include: adminListingInclude,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       cursor: query.cursor ? { id: query.cursor } : undefined,
       skip: query.cursor ? 1 : 0,
@@ -267,7 +267,7 @@ export class ListingsService {
       toAdminListingResponse(l, DEFAULT_LOCALE, role),
     );
     const page = toCursorPage(mapped, query.limit);
-    return { ...page, items: page.items.map((l) => this.withUrls(l)) };
+    return { ...page, items: page.items.map((l) => this.withAdminUrls(l)) };
   }
 
   // sellerId === null — SUPER_ADMIN, проверку владения пропускаем.
@@ -283,7 +283,7 @@ export class ListingsService {
   private async findOwned(id: string, sellerId: string | null) {
     const listing = await this.prisma.listing.findUnique({
       where: { id },
-      include: withCatalog,
+      include: adminListingInclude,
     });
     if (!listing) throw new NotFoundException(err(ERRORS.LISTING_NOT_FOUND));
     if (sellerId !== null && listing.sellerId !== sellerId) {
@@ -292,11 +292,10 @@ export class ListingsService {
     return listing;
   }
 
-  private toAdmin(
-    listing: Prisma.ListingGetPayload<{ include: typeof withCatalog }>,
-    role: Role,
-  ): AdminListingResponse {
-    return this.withUrls(toAdminListingResponse(listing, DEFAULT_LOCALE, role));
+  private toAdmin(listing: AdminListingRow, role: Role): AdminListingResponse {
+    return this.withAdminUrls(
+      toAdminListingResponse(listing, DEFAULT_LOCALE, role),
+    );
   }
 
   // Розница пересчитывается в той же транзакции, что и запись costPrice/stock:
@@ -305,7 +304,7 @@ export class ListingsService {
     await this.pricing.recalculate({ id }, tx);
     return tx.listing.findUniqueOrThrow({
       where: { id },
-      include: withCatalog,
+      include: adminListingInclude,
     });
   }
 
@@ -320,28 +319,22 @@ export class ListingsService {
     const { sellerId: _, ...data } = dto;
     assertCanSetMarkup(dto, role);
     await this.catalog.assertUsable(data.catalogItemId, sellerId);
-    try {
-      const listing = await this.prisma.$transaction(async (tx) => {
-        // price NOT NULL, а считает её только PricingService.recalculate — кладём
-        // себестоимость и сразу пересчитываем.
-        const created = await tx.listing.create({
-          data: { ...data, price: data.costPrice, sellerId },
-        });
-        return this.reloadPriced(tx, created.id);
+    await this.assertVariantFree(sellerId, data.catalogItemId, {
+      seedling: data.seedling ?? false,
+      potVolumeMl: data.potVolumeMl ?? null,
+      stemCount: data.stemCount ?? null,
+      heightCm: data.heightCm ?? null,
+    });
+    const listing = await this.prisma.$transaction(async (tx) => {
+      // price NOT NULL, а считает её только PricingService.recalculate — кладём
+      // себестоимость и сразу пересчитываем.
+      const created = await tx.listing.create({
+        data: { ...data, price: data.costPrice, sellerId },
       });
-      await this.cache.bump();
-      return this.toAdmin(listing, role);
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          'У продавца уже есть позиция по этому товару',
-        );
-      }
-      throw error;
-    }
+      return this.reloadPriced(tx, created.id);
+    });
+    await this.cache.bump();
+    return this.toAdmin(listing, role);
   }
 
   async update(
@@ -351,7 +344,20 @@ export class ListingsService {
     role: Role,
   ): Promise<AdminListingResponse> {
     assertCanSetMarkup(dto, role);
-    await this.findOwned(id, sellerId);
+    const current = await this.findOwned(id, sellerId);
+    // Смена позиции каталога или атрибутов — снова проверяем, что такого варианта
+    // у продавца ещё нет. undefined в PATCH = «поле не трогаем».
+    const catalogItemId = dto.catalogItemId ?? current.catalogItemId;
+    if (dto.catalogItemId !== undefined) {
+      await this.catalog.assertUsable(dto.catalogItemId, current.sellerId);
+    }
+    const next = { ...pickVariant(current) };
+    if (dto.seedling !== undefined) next.seedling = dto.seedling;
+    if (dto.potVolumeMl !== undefined) next.potVolumeMl = dto.potVolumeMl;
+    if (dto.stemCount !== undefined) next.stemCount = dto.stemCount;
+    if (dto.heightCm !== undefined) next.heightCm = dto.heightCm;
+    await this.assertVariantFree(current.sellerId, catalogItemId, next, id);
+
     const listing = await this.prisma.$transaction(async (tx) => {
       await tx.listing.update({ where: { id }, data: dto });
       return this.reloadPriced(tx, id);
@@ -362,8 +368,78 @@ export class ListingsService {
 
   async remove(id: string, sellerId: string | null): Promise<void> {
     await this.findOwned(id, sellerId);
+    // Строки своей галереи уходят каскадом, объекты в бакете — нет: гасим их
+    // так же, как при удалении одного медиафайла.
+    for (const media of await this.gallery.list({ listingId: id })) {
+      await this.gallery.remove({ listingId: id }, media.id);
+    }
     await this.prisma.listing.delete({ where: { id } });
     await this.cache.bump();
+  }
+
+  // ── Своя галерея варианта. Пустая — витрина показывает фото каталога. ──
+
+  async addMedia(
+    id: string,
+    sellerId: string | null,
+    file: Express.Multer.File,
+    role: Role,
+  ): Promise<AdminListingResponse> {
+    await this.findOwned(id, sellerId);
+    await this.gallery.add({ listingId: id }, file);
+    return this.toAdmin(await this.findOwned(id, sellerId), role);
+  }
+
+  async removeMedia(
+    id: string,
+    sellerId: string | null,
+    mediaId: string,
+    role: Role,
+  ): Promise<AdminListingResponse> {
+    await this.findOwned(id, sellerId);
+    await this.gallery.remove({ listingId: id }, mediaId);
+    return this.toAdmin(await this.findOwned(id, sellerId), role);
+  }
+
+  async reorderMedia(
+    id: string,
+    sellerId: string | null,
+    mediaId: string,
+    direction: 'up' | 'down',
+    role: Role,
+  ): Promise<AdminListingResponse> {
+    await this.findOwned(id, sellerId);
+    await this.gallery.reorder({ listingId: id }, mediaId, direction);
+    return this.toAdmin(await this.findOwned(id, sellerId), role);
+  }
+
+  /**
+   * Вариант уникален в пределах продавца и позиции каталога. Проверка в коде, а не
+   * индексом: NULL в Postgres-unique различны, NULLS NOT DISTINCT Prisma не
+   * выражает. `field: null` в where Prisma компилирует в IS NULL — «не указано»
+   * совпадает с «не указано». Гонку двух одновременных сохранений не ловит —
+   * листинги заводят руками в админке, это приемлемо.
+   */
+  private async assertVariantFree(
+    sellerId: string,
+    catalogItemId: string,
+    variant: VariantFields,
+    exceptId?: string,
+  ): Promise<void> {
+    const duplicate = await this.prisma.listing.findFirst({
+      where: {
+        sellerId,
+        catalogItemId,
+        ...variant,
+        id: exceptId ? { not: exceptId } : undefined,
+      },
+      select: { id: true },
+    });
+    if (duplicate) {
+      throw new ConflictException(
+        'У продавца уже есть такой вариант этого товара',
+      );
+    }
   }
 }
 
