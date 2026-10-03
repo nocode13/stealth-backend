@@ -159,9 +159,7 @@ export class ListingsService {
       'listings',
       { ...query, locale },
       async () => {
-        const { code, catalogItemIds } = await this.resolveSearch(
-          query.search,
-        );
+        const { code, catalogItemIds } = await this.resolveSearch(query.search);
         const rows = await this.prisma.listing.findMany({
           where: {
             code,
