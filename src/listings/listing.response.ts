@@ -35,6 +35,8 @@ export type ListingWithTranslations = Prisma.ListingGetPayload<{
 // не попадает НИКОГДА: поля перечислены явно, а не спредом Prisma-строки.
 export interface ListingResponse {
   id: string;
+  /** Артикул: показывается как «#10001», идёт в короткую ссылку app.egen.uz/l/<code>. */
+  code: number;
   sellerId: string;
   seller: { id: string; name: string };
   catalogItemId: string;
@@ -53,6 +55,7 @@ export const toListingResponse = (
   locale: Locale,
 ): ListingResponse => ({
   id: l.id,
+  code: l.code,
   sellerId: l.sellerId,
   seller: {
     id: l.seller.id,

@@ -87,7 +87,10 @@ export class UpdateListingDto extends PartialType(
 ) {}
 
 export class FindListingsQueryDto extends CursorPaginationDto {
-  @ApiPropertyOptional({ description: 'Поиск по названию позиции справочника' })
+  @ApiPropertyOptional({
+    description:
+      'Поиск по названию позиции справочника или по артикулу («10001» / «#10001»)',
+  })
   @IsOptional()
   @IsString()
   search?: string;
