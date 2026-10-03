@@ -123,6 +123,12 @@ src/
   набора в пределах `[sellerId, catalogItemId]` проверяет `ListingsService.assertVariantFree`
   (409), а не индекс: NULL в Postgres-unique различны. Своя галерея варианта (`media`)
   **заменяет** галерею каталога, пустая — показывается каталог (см. «Фото»).
+  `code` — **артикул**: unique `Int` из своей последовательности с 10001 (миграция
+  `listing_code`), руками не пишется. Показывается как `#10001`, идёт в короткую ссылку
+  `app.egen.uz/l/<code>`; у каждого варианта свой. `GET /mobile/listings/:id` принимает и
+  cuid, и артикул (чисто цифровой параметр — всегда артикул, cuid начинается с буквы);
+  `search` вида `10001`/`#10001` (4–7 цифр, `src/listings/listing-code.ts`) ищет точно по
+  `code` вместо fuzzy по названию — и в витрине, и в `admin/listings`.
 - **MarkupTier** — ступень базовой наценки по себестоимости (`minCost` от, `markupBps`),
   правится набором через `admin/settings`. **PricePriority** — порядок источников цены
   (`PriceSource`: `PROMOTION`/`LISTING_MARKUP`/`BASE_MARKUP`), ровно три строки, как
@@ -798,7 +804,7 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 `FavoritesService` и `CartService` своих include/мапперов не держат — новое поле добавляется
 здесь один раз.
 
-- Ответ **плоский**: `name`/`unit`/`category { id, name }`/`country { code, name }`/
+- Ответ **плоский**: артикул `code`, `name`/`unit`/`category { id, name }`/`country { code, name }`/
   `freeDelivery` каталога лежат рядом с `price`/`oldPrice`/`stock` и атрибутами варианта
   (`seedling`, `potVolumeMl`, `stemCount`, `heightCm` — сырыми, подпись собирает клиент).
   Вложенного `catalogItem`, `sellerId`, `status`, `updatedAt` нет; вместо `status` —
@@ -940,6 +946,9 @@ Buckets приватные и публичных URL не дают, а ссыл�
   витрины нет `catalogItem`/`description`/`costPrice`/`sellerId`, у медиа только
   `id/type/url/posterUrl`; чекаут пишет `order_items.variant`, в боте продавца строка
   позиции с подписью варианта; удаление листинга сносит его медиа (строки и объекты S3).
+- артикул: `GET /mobile/listings/10001` и `GET /mobile/listings/<cuid>` того же листинга
+  отдают одно и то же; `?search=10001` и `?search=%2310001` находят ровно его, `?search=роза`
+  ищет по названию как раньше; у существующих листингов после миграции `code` ≥ 10001.
 - новинки: `GET /mobile/listings` без параметров отдаёт то же, что и раньше;
   `?createdWithinDays=7` — только `createdAt >= now − 7д`, акционные первыми, курсор без дублей;
   `createdWithinDays` = `0`/`91`/`abc` → 400; `/admin/listings?createdWithinDays=3` тоже фильтрует.

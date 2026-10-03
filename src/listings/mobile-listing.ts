@@ -44,6 +44,8 @@ export type MobileListingRow = Prisma.ListingGetPayload<{
 /** Карточка в списках: витрина, новинки, продавец, reels, избранное. */
 export interface ListingCardResponse extends VariantFields {
   id: string;
+  /** Артикул: показывается как «#10001», идёт в короткую ссылку app.egen.uz/l/<code>. */
+  code: number;
   name: string;
   /** HTML (tiptap, санитизирован на входе). Нужен и в списке — его показывает лента reels. */
   description: string | null;
@@ -116,6 +118,7 @@ export function toListingCard(
   const t = pickTranslation(item.translations, locale);
   return {
     id: l.id,
+    code: l.code,
     name: t.name,
     description: t.description,
     unit: t.unit,

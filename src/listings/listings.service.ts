@@ -39,6 +39,7 @@ import {
   ListingSort,
   UpdateListingDto,
 } from './dto/listing.dto';
+import { isListingCode, parseListingCode } from './listing-code';
 
 // Порог word_similarity: 0 = что угодно совпадёт, 1 = точное совпадение.
 // 0.3 ловит опечатки/окончания, не превращая поиск в «покажи всё».
@@ -136,6 +137,17 @@ export class ListingsService {
     return rows.map((r) => r.catalogItemId);
   }
 
+  // Строка поиска → фильтр: артикул («10001» / «#10001») ищется точно по code,
+  // всё остальное — fuzzy по названию. Оба поля undefined — поиска нет.
+  private async resolveSearch(
+    search?: string,
+  ): Promise<{ code?: number; catalogItemIds?: string[] }> {
+    if (!search) return {};
+    const code = parseListingCode(search);
+    if (code !== null) return { code };
+    return { catalogItemIds: await this.findFuzzyCatalogItemIds(search) };
+  }
+
   // Витрина мобилки: только активные листинги. status из query игнорируется — тут
   // всегда ACTIVE + остаток > 0.
   async findStorefront(
@@ -147,11 +159,12 @@ export class ListingsService {
       'listings',
       { ...query, locale },
       async () => {
-        const catalogItemIds = query.search
-          ? await this.findFuzzyCatalogItemIds(query.search)
-          : undefined;
+        const { code, catalogItemIds } = await this.resolveSearch(
+          query.search,
+        );
         const rows = await this.prisma.listing.findMany({
           where: {
+            code,
             status: ListingStatus.ACTIVE,
             stock: { gt: 0 },
             sellerId: query.sellerId,
@@ -178,17 +191,24 @@ export class ListingsService {
   }
 
   // Одно активное предложение для витрины мобилки (карточка товара) + все доступные
-  // варианты той же позиции у того же продавца (чипы «другие варианты»).
+  // варианты той же позиции у того же продавца (чипы «другие варианты»). Принимает и
+  // cuid, и артикул: короткие ссылки app.egen.uz/l/<code> открывают ту же карточку.
   async findOnePublic(
-    id: string,
+    idOrCode: string,
     locale: Locale,
   ): Promise<ListingDetailResponse> {
     const listing = await this.cache.wrap(
       'listing',
-      { id, locale },
+      { id: idOrCode, locale },
       async () => {
         const found = await this.prisma.listing.findFirst({
-          where: { id, status: ListingStatus.ACTIVE, stock: { gt: 0 } },
+          where: {
+            ...(isListingCode(idOrCode)
+              ? { code: Number(idOrCode) }
+              : { id: idOrCode }),
+            status: ListingStatus.ACTIVE,
+            stock: { gt: 0 },
+          },
           include: mobileListingInclude,
         });
         // Промах в БД не кешируется: исключение из колбэка wrap пробрасывает как есть.
@@ -218,13 +238,12 @@ export class ListingsService {
     query: FindListingsQueryDto,
     role: Role,
   ): Promise<CursorPage<AdminListingResponse>> {
-    const catalogItemIds = query.search
-      ? await this.findFuzzyCatalogItemIds(query.search)
-      : undefined;
+    const { code, catalogItemIds } = await this.resolveSearch(query.search);
     // Продавец розницу не видит — и фильтрует по той цене, которую знает.
     const priceFilter = buildPriceFilter(query.minPrice, query.maxPrice);
     const rows = await this.prisma.listing.findMany({
       where: {
+        code,
         sellerId: sellerId ?? undefined,
         status: query.status,
         ...(role === Role.SUPER_ADMIN

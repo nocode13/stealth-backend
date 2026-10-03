@@ -47,6 +47,8 @@ export type AdminListingRow = Prisma.ListingGetPayload<{
  */
 export interface AdminListingResponse extends VariantFields {
   id: string;
+  /** Артикул: показывается как «#10001». */
+  code: number;
   sellerId: string;
   seller: { id: string; name: string };
   catalogItemId: string;
@@ -77,6 +79,7 @@ export const toAdminListingResponse = (
 ): AdminListingResponse => {
   const base = {
     id: l.id,
+    code: l.code,
     sellerId: l.sellerId,
     seller: {
       id: l.seller.id,
