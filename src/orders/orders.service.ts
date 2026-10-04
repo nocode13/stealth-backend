@@ -8,8 +8,6 @@ import {
 import {
   Locale,
   ListingStatus,
-  MediaStatus,
-  MediaType,
   OrderGroupStatus,
   OrderStatus,
   Prisma,
@@ -28,6 +26,8 @@ import { DEFAULT_LOCALE } from '../i18n/locale';
 import { toLocalizedText } from '../i18n/localized-text';
 import { ERRORS } from '../i18n/messages';
 import { pickTranslation } from '../i18n/pick';
+import { coverUrl, readyMedia, resolveMedia } from '../listings/listing-media';
+import { pickVariant } from '../listings/variant';
 import { OrderNotifier } from './order-notifier.service';
 import {
   CancelOrderDto,
@@ -84,17 +84,6 @@ export type OrderGroupWithOrders = Prisma.OrderGroupGetPayload<{
   include: ReturnType<typeof withGroupOrders>;
 }>;
 
-// Обложка для снапшота позиции заказа. В галерее первым может стоять видео, а в
-// карточке заказа (админка, бот, история покупателя) нужна картинка — берём первое
-// фото, иначе обложку первого видео.
-function coverUrl(
-  media: { type: MediaType; url: string; posterUrl: string | null }[],
-): string | null {
-  const image = media.find((m) => m.type === MediaType.IMAGE);
-  if (image) return image.url;
-  return media.find((m) => m.posterUrl)?.posterUrl ?? null;
-}
-
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -135,16 +124,12 @@ export class OrdersService {
                 },
               },
             },
+            // Вся готовая галерея (своя и каталога), а не take: 1 — в снапшот
+            // заказа нужна картинка, а первым медиа может оказаться видео (см.
+            // coverUrl), и откуда брать фото, решает resolveMedia.
+            media: readyMedia,
             catalogItem: {
-              // Вся готовая галерея, а не take: 1 — в снапшот заказа нужна
-              // картинка, а первым медиа может оказаться видео (см. coverUrl).
-              include: {
-                translations: true,
-                media: {
-                  where: { status: MediaStatus.READY },
-                  orderBy: { sortOrder: 'asc' },
-                },
-              },
+              include: { translations: true, media: readyMedia },
             },
           },
         },
@@ -268,11 +253,12 @@ export class OrdersService {
                   item.listing.catalogItem.translations,
                   'name',
                 ),
-                catalogItemImageUrl: coverUrl(item.listing.catalogItem.media),
+                catalogItemImageUrl: coverUrl(resolveMedia(item.listing)),
                 unit: toLocalizedText(
                   item.listing.catalogItem.translations,
                   'unit',
                 ),
+                variant: pickVariant(item.listing),
                 price: item.listing.price,
                 quantity: item.quantity,
                 total: item.listing.price * item.quantity,
