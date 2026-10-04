@@ -1,38 +1,17 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Locale, MediaStatus, Prisma } from '@prisma/client';
+import { Locale } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { withMediaUrls } from '../catalog/catalog-media.util';
 import { CursorPage, toCursorPage } from '../common/pagination';
 import { CursorPaginationDto } from '../common/dto/pagination.dto';
 import {
-  ListingResponse,
-  toListingResponse,
-} from '../listings/listing.response';
+  ListingCardResponse,
+  mobileListingInclude,
+  toListingCard,
+} from '../listings/mobile-listing';
 import { err } from '../i18n/api-error';
 import { ERRORS } from '../i18n/messages';
-
-// Повторяет ListingsService.withCatalog (там не экспортирован) — глубина вложенности
-// нужна ListingResponse: catalogItem с переводами/категорией/медиа и seller с именем.
-const withListing = {
-  listing: {
-    include: {
-      catalogItem: {
-        include: {
-          translations: true,
-          category: { include: { translations: true } },
-          country: { include: { translations: true } },
-          media: {
-            where: { status: MediaStatus.READY },
-            orderBy: { sortOrder: 'asc' },
-          },
-        },
-      },
-      seller: { select: { id: true, translations: true } },
-      promotion: { include: { translations: true } },
-    },
-  },
-} satisfies Prisma.FavoriteInclude;
 
 @Injectable()
 export class FavoritesService {
@@ -52,27 +31,27 @@ export class FavoritesService {
 
   // Персональные данные — cache.wrap здесь НЕ используется (это не витрина, шарить
   // между пользователями нельзя). Архивные/распроданные листинги не фильтруются:
-  // избранное обязано показывать их тоже, клиент помечает недоступными сам.
+  // избранное обязано показывать их тоже, клиент помечает их по `available: false`.
   async list(
     userId: string,
     query: CursorPaginationDto,
     locale: Locale,
-  ): Promise<CursorPage<ListingResponse>> {
+  ): Promise<CursorPage<ListingCardResponse>> {
     const rows = await this.prisma.favorite.findMany({
       where: { userId },
-      include: withListing,
+      include: { listing: { include: mobileListingInclude } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       cursor: query.cursor ? { id: query.cursor } : undefined,
       skip: query.cursor ? 1 : 0,
       take: query.limit + 1,
     });
     // toCursorPage режет по id — здесь это ещё id Favorite (курсор страницы), не
-    // листинга: слайс и nextCursor считаются ДО мэппинга в ListingResponse.
+    // листинга: слайс и nextCursor считаются ДО мэппинга в карточку.
     const page = toCursorPage(rows, query.limit);
     return {
       ...page,
       items: page.items.map((f) =>
-        this.withUrls(toListingResponse(f.listing, locale)),
+        withMediaUrls(this.storage, toListingCard(f.listing, locale)),
       ),
     };
   }
@@ -94,12 +73,5 @@ export class FavoritesService {
   async remove(userId: string, listingId: string): Promise<void> {
     // deleteMany — идемпотентно: снять лайк с уже не-избранного листинга не ошибка.
     await this.prisma.favorite.deleteMany({ where: { userId, listingId } });
-  }
-
-  private withUrls(listing: ListingResponse): ListingResponse {
-    return {
-      ...listing,
-      catalogItem: withMediaUrls(this.storage, listing.catalogItem),
-    };
   }
 }

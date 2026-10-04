@@ -1,4 +1,5 @@
 import {
+  CatalogItemMedia,
   Locale,
   ListingStatus,
   PriceSource,
@@ -10,78 +11,55 @@ import {
   CatalogItemResponse,
   toCatalogItemResponse,
 } from '../catalog/catalog.response';
-import {
-  ListingPromotionResponse,
-  toListingPromotionResponse,
-} from '../promotions/promotion.response';
+import { toListingPromotionResponse } from '../promotions/promotion.response';
+import { readyMedia } from './listing-media';
+import { VariantFields, pickVariant } from './variant';
 
-export type ListingWithTranslations = Prisma.ListingGetPayload<{
-  include: {
-    catalogItem: {
-      include: {
-        translations: true;
-        category: { include: { translations: true } };
-        country: { include: { translations: true } };
-        media: true;
-      };
-    };
-    seller: { select: { id: true; translations: true } };
-    promotion: { include: { translations: true } };
-  };
-}>;
-
-// Контракт мобилки: `price` — розница, которую платит покупатель (с акцией, если
-// она есть), `oldPrice` — зачёркнутая «было» (null — не на акции). ⚠️ costPrice сюда
-// не попадает НИКОГДА: поля перечислены явно, а не спредом Prisma-строки.
-export interface ListingResponse {
-  id: string;
-  sellerId: string;
-  seller: { id: string; name: string };
-  catalogItemId: string;
-  catalogItem: CatalogItemResponse;
-  price: number;
-  oldPrice: number | null;
-  promotion: ListingPromotionResponse | null;
-  stock: number;
-  status: ListingStatus;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export const toListingResponse = (
-  l: ListingWithTranslations,
-  locale: Locale,
-): ListingResponse => ({
-  id: l.id,
-  sellerId: l.sellerId,
-  seller: {
-    id: l.seller.id,
-    name: pickTranslation(l.seller.translations, locale).name,
+// Контракт мобилки живёт в mobile-listing.ts — здесь только админка. Она по-прежнему
+// получает вложенный catalogItem (форма редактирования и таблицы его читают).
+//
+// catalogItem.media — только READY (превью в таблице; галерея каталога
+// редактируется в каталоге). Своя галерея листинга — целиком, с PROCESSING/FAILED:
+// админка обязана показывать, что видео ещё обрабатывается.
+export const adminListingInclude = {
+  catalogItem: {
+    include: {
+      translations: true,
+      category: { include: { translations: true } },
+      country: { include: { translations: true } },
+      media: readyMedia,
+    },
   },
-  catalogItemId: l.catalogItemId,
-  catalogItem: toCatalogItemResponse(l.catalogItem, locale),
-  price: l.price,
-  // Инвариант PricingService: oldPrice и promotion либо оба есть, либо оба null.
-  oldPrice: l.promotion ? l.oldPrice : null,
-  promotion: l.promotion
-    ? toListingPromotionResponse(l.promotion, locale)
-    : null,
-  stock: l.stock,
-  status: l.status,
-  createdAt: l.createdAt,
-  updatedAt: l.updatedAt,
-});
+  media: { orderBy: { sortOrder: 'asc' } },
+  seller: { select: { id: true, translations: true } },
+  // Акция, давшая текущую price (название в таблицу). Пишет PricingService.
+  promotion: { include: { translations: true } },
+} satisfies Prisma.ListingInclude;
+
+export type AdminListingRow = Prisma.ListingGetPayload<{
+  include: typeof adminListingInclude;
+}>;
 
 /**
  * Листинг для админки. costPrice видят все, розницу, источник цены и свою наценку —
  * только SUPER_ADMIN: продавец знает лишь свою цену и сумму к выплате, наценку
  * платформы он не видит.
  */
-export type AdminListingResponse = Omit<
-  ListingResponse,
-  'price' | 'oldPrice' | 'promotion'
-> & {
+export interface AdminListingResponse extends VariantFields {
+  id: string;
+  /** Артикул: показывается как «#10001». */
+  code: number;
+  sellerId: string;
+  seller: { id: string; name: string };
+  catalogItemId: string;
+  catalogItem: CatalogItemResponse;
+  /** Своя галерея варианта (все статусы). Пустая — на витрине фото каталога. */
+  ownMedia: CatalogItemMedia[];
   costPrice: number;
+  stock: number;
+  status: ListingStatus;
+  createdAt: Date;
+  updatedAt: Date;
   /** Только SUPER_ADMIN. */
   price?: number;
   /** Только SUPER_ADMIN; своя наценка, bps; null — базовая ступенчатая. */
@@ -92,22 +70,44 @@ export type AdminListingResponse = Omit<
   oldPrice?: number | null;
   /** Только SUPER_ADMIN; акция, давшая текущую price. */
   promotion?: { id: string; title: string } | null;
-};
+}
 
 export const toAdminListingResponse = (
-  l: ListingWithTranslations,
+  l: AdminListingRow,
   locale: Locale,
   role: Role,
 ): AdminListingResponse => {
-  const { price, oldPrice, promotion, ...base } = toListingResponse(l, locale);
-  if (role !== Role.SUPER_ADMIN) return { ...base, costPrice: l.costPrice };
+  const base = {
+    id: l.id,
+    code: l.code,
+    sellerId: l.sellerId,
+    seller: {
+      id: l.seller.id,
+      name: pickTranslation(l.seller.translations, locale).name,
+    },
+    catalogItemId: l.catalogItemId,
+    catalogItem: toCatalogItemResponse(l.catalogItem, locale),
+    ...pickVariant(l),
+    ownMedia: l.media,
+    costPrice: l.costPrice,
+    stock: l.stock,
+    status: l.status,
+    createdAt: l.createdAt,
+    updatedAt: l.updatedAt,
+  };
+  if (role !== Role.SUPER_ADMIN) return base;
   return {
     ...base,
-    costPrice: l.costPrice,
-    price,
+    price: l.price,
     customMarkupBps: l.customMarkupBps,
     priceSource: l.priceSource,
-    oldPrice,
-    promotion: promotion ? { id: promotion.id, title: promotion.title } : null,
+    // Инвариант PricingService: oldPrice и promotion либо оба есть, либо оба null.
+    oldPrice: l.promotion ? l.oldPrice : null,
+    promotion: l.promotion
+      ? {
+          id: l.promotion.id,
+          title: toListingPromotionResponse(l.promotion, locale).title,
+        }
+      : null,
   };
 };

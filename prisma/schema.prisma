@@ -511,7 +511,13 @@ model AppVersion {
   @@map("app_versions")
 }
 
-// Медиа позиции каталога — фото И видео в одной таблице, много на одну позицию.
+// Медиа позиции каталога ИЛИ листинга (варианта) — фото и видео в одной таблице.
+// Владелец ровно один: catalogItemId либо listingId (CHECK в миграции
+// 20260929120000_listing_variants, Prisma его не выражает). Таблица общая, чтобы
+// видео-воркер (MediaProcessingService) работал по id, не зная, чья это галерея.
+// Своя галерея листинга ЗАМЕНЯЕТ галерею каталога — решает resolveMedia
+// (src/listings/listing-media.ts), больше нигде.
+//
 // sortOrder — явный сквозной порядок галереи (first = обложка/превью), меняется
 // кнопками вверх/вниз в админке.
 //
@@ -519,9 +525,11 @@ model AppVersion {
 // транскода перезаписывается ссылкой на mp4; posterUrl — webp-кадр, обложка.
 // Публичная витрина отдаёт только status: READY.
 model CatalogItemMedia {
-  id            String      @id @default(cuid())
-  catalogItemId String
-  catalogItem   CatalogItem @relation(fields: [catalogItemId], references: [id], onDelete: Cascade)
+  id            String       @id @default(cuid())
+  catalogItemId String?
+  catalogItem   CatalogItem? @relation(fields: [catalogItemId], references: [id], onDelete: Cascade)
+  listingId     String?
+  listing       Listing?     @relation(fields: [listingId], references: [id], onDelete: Cascade)
   type          MediaType   @default(IMAGE)
   status        MediaStatus @default(READY)
   url           String
@@ -530,11 +538,16 @@ model CatalogItemMedia {
   createdAt     DateTime    @default(now())
 
   @@index([catalogItemId])
+  @@index([listingId])
   @@index([status])
   @@map("catalog_item_media")
 }
 
-// Предложение продавца поверх позиции справочника + инвентарь (остаток).
+// Предложение продавца поверх позиции справочника + инвентарь (остаток). Листинг —
+// это ВАРИАНТ товара: у одного продавца по одной позиции их может быть несколько
+// (росток, горшок 3 л, 5 стеблей, 60 см), различаются атрибутами ниже. Уникальность
+// набора атрибутов проверяет ListingsService.assertVariantFree, а не индекс: NULL в
+// Postgres-unique различны, а NULLS NOT DISTINCT Prisma не выражает.
 //
 // Две цены: costPrice вводит продавец (столько платформа должна ему), price — розница
 // для покупателя. ⚠️ price НИКТО не пишет руками: это денормализованный результат
@@ -543,6 +556,10 @@ model CatalogItemMedia {
 // не уходит никогда.
 model Listing {
   id            String        @id @default(cuid())
+  // Артикул: короткий человекочитаемый номер для ссылок (app.egen.uz/l/<code>) и
+  // поиска. Сквозная последовательность с 10001 (см. миграцию listing_code);
+  // показывается как «#10001», в БД — просто число.
+  code          Int           @unique @default(autoincrement())
   sellerId      String
   seller        Seller        @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   catalogItemId String
@@ -564,6 +581,14 @@ model Listing {
   onPromo       Boolean       @default(false)
   stock         Int           @default(0)
   status        ListingStatus @default(DRAFT)
+  // Атрибуты варианта (src/listings/variant.ts). null — не указано. Мобилке уходят
+  // сырыми, подпись собирает клиент.
+  seedling      Boolean       @default(false) // росток
+  potVolumeMl   Int? // объём горшка, мл (0,5 л = 500 — без float)
+  stemCount     Int?
+  heightCm      Int?
+  // Своя галерея варианта; пустая — показывается галерея каталога.
+  media         CatalogItemMedia[]
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
@@ -572,9 +597,10 @@ model Listing {
   orderItems OrderItem[]
   promotionItems PromotionItem[]
 
-  @@unique([sellerId, catalogItemId])
+  @@index([sellerId, catalogItemId])
   @@index([status])
   @@index([catalogItemId])
+  @@index([seedling])
   @@index([createdAt])
   @@index([status, price])
   @@index([promotionId])
@@ -781,6 +807,9 @@ model OrderItem {
   catalogItemImageUrl String?
   /// Снапшот единицы измерения по локалям, той же формы, что catalogItemName.
   unit                Json
+  /// Снапшот атрибутов варианта { seedling, potVolumeMl, stemCount, heightCm } —
+  /// сырыми, без языка: подпись собирает клиент. null у заказов до вариантов.
+  variant             Json?
 
   price     Int // розница на момент оформления
   quantity  Int

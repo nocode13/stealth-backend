@@ -5,9 +5,9 @@ interface HasMedia {
 }
 
 // В БД media.url/posterUrl хранят ключ S3-объекта — здесь собираем полный URL для
-// ответа фронту. Переиспользуется CatalogService, ListingsService и CartService: у
-// каждого своя глубина вложенности (CatalogItem — напрямую, Listing/CartItem — через
-// .catalogItem), но форма самой галереи одна и та же.
+// ответа фронту. Переиспользуется CatalogService, ListingsService, CartService и
+// FavoritesService: у каталога и мобильного листинга галерея лежит в `media`
+// напрямую, у админского листинга — ещё и в `.catalogItem`/`ownMedia`.
 export function withMediaUrls<T extends HasMedia>(
   storage: StorageService,
   item: T,

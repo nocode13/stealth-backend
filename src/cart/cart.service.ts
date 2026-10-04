@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Locale, ListingStatus, MediaStatus, Prisma } from '@prisma/client';
+import { Locale, ListingStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 import { StorageService } from '../storage/storage.service';
@@ -12,57 +12,22 @@ import { withMediaUrls } from '../catalog/catalog-media.util';
 import { err } from '../i18n/api-error';
 import { ERRORS } from '../i18n/messages';
 import {
-  CatalogItemResponse,
-  toCatalogItemResponse,
-} from '../catalog/catalog.response';
-import {
-  ListingPromotionResponse,
-  toListingPromotionResponse,
-} from '../promotions/promotion.response';
+  CartListingResponse,
+  mobileListingInclude,
+  toCartListing,
+} from '../listings/mobile-listing';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 
+// Форма листинга — общая с витриной (mobile-listing.ts): корзина не держит свою
+// копию include и маппера. Корзина — экран покупателя, необработанное видео туда не
+// попадает (readyMedia внутри mobileListingInclude).
 const withListing = {
-  listing: {
-    include: {
-      catalogItem: {
-        include: {
-          translations: true,
-          category: { include: { translations: true } },
-          country: { include: { translations: true } },
-          // Корзина — экран покупателя, необработанное видео туда не попадает.
-          media: {
-            where: { status: MediaStatus.READY },
-            orderBy: { sortOrder: 'asc' },
-          },
-        },
-      },
-      promotion: { include: { translations: true } },
-    },
-  },
+  listing: { include: mobileListingInclude },
 } satisfies Prisma.CartItemInclude;
 
 type CartItemWithListing = Prisma.CartItemGetPayload<{
   include: typeof withListing;
 }>;
-
-// Поля листинга перечислены явно, а не спредом Prisma-строки: в ней лежат
-// costPrice/customMarkupBps, а себестоимость покупателю показывать нельзя. Новая
-// колонка Listing в корзину тоже не утечёт, пока её не добавят сюда осознанно.
-type CartListingResponse = Pick<
-  CartItemWithListing['listing'],
-  | 'id'
-  | 'sellerId'
-  | 'catalogItemId'
-  | 'price'
-  | 'stock'
-  | 'status'
-  | 'createdAt'
-  | 'updatedAt'
-  | 'oldPrice'
-> & {
-  catalogItem: CatalogItemResponse;
-  promotion: ListingPromotionResponse | null;
-};
 
 export interface CartItemResponse extends Omit<CartItemWithListing, 'listing'> {
   listing: CartListingResponse;
@@ -198,27 +163,10 @@ export class CartService {
       items.every((i) => i.listing.catalogItem.freeDelivery);
     const quote = await this.settings.quote(itemsTotal, { allFreeDelivery });
     return {
-      // catalogItem.media хранит ключи S3-объектов — здесь собираем полные URL.
+      // media хранит ключи S3-объектов — здесь собираем полные URL.
       items: items.map(({ listing, ...i }) => ({
         ...i,
-        listing: {
-          id: listing.id,
-          sellerId: listing.sellerId,
-          catalogItemId: listing.catalogItemId,
-          price: listing.price,
-          oldPrice: listing.promotion ? listing.oldPrice : null,
-          promotion: listing.promotion
-            ? toListingPromotionResponse(listing.promotion, locale)
-            : null,
-          stock: listing.stock,
-          status: listing.status,
-          createdAt: listing.createdAt,
-          updatedAt: listing.updatedAt,
-          catalogItem: withMediaUrls(
-            this.storage,
-            toCatalogItemResponse(listing.catalogItem, locale),
-          ),
-        },
+        listing: withMediaUrls(this.storage, toCartListing(listing, locale)),
       })),
       itemCount,
       savings,
