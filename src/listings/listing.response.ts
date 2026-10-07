@@ -49,6 +49,8 @@ export interface AdminListingResponse extends VariantFields {
   id: string;
   /** Артикул: показывается как «#10001». */
   code: number;
+  /** Код продавца; null — не задан. */
+  sku: string | null;
   sellerId: string;
   seller: { id: string; name: string };
   catalogItemId: string;
@@ -80,6 +82,7 @@ export const toAdminListingResponse = (
   const base = {
     id: l.id,
     code: l.code,
+    sku: l.sku,
     sellerId: l.sellerId,
     seller: {
       id: l.seller.id,
