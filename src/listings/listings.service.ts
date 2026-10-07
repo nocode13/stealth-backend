@@ -148,6 +148,23 @@ export class ListingsService {
     return { catalogItemIds: await this.findFuzzyCatalogItemIds(search) };
   }
 
+  // Поиск админки: то же, что у витрины, плюс код продавца (sku) — подстрокой без
+  // учёта регистра. Артикул и sku через OR: числовой sku («12345») выглядит как
+  // артикул, и без OR такой код было бы не найти.
+  private async resolveAdminSearch(
+    search?: string,
+  ): Promise<Prisma.ListingWhereInput> {
+    const term = search?.trim();
+    if (!term) return {};
+    const bySku: Prisma.ListingWhereInput = {
+      sku: { contains: term, mode: 'insensitive' },
+    };
+    const code = parseListingCode(term);
+    if (code !== null) return { OR: [{ code }, bySku] };
+    const catalogItemIds = await this.findFuzzyCatalogItemIds(term);
+    return { OR: [bySku, { catalogItemId: { in: catalogItemIds } }] };
+  }
+
   // Витрина мобилки: только активные листинги. status из query игнорируется — тут
   // всегда ACTIVE + остаток > 0.
   async findStorefront(
@@ -236,12 +253,12 @@ export class ListingsService {
     query: FindListingsQueryDto,
     role: Role,
   ): Promise<CursorPage<AdminListingResponse>> {
-    const { code, catalogItemIds } = await this.resolveSearch(query.search);
+    const searchWhere = await this.resolveAdminSearch(query.search);
     // Продавец розницу не видит — и фильтрует по той цене, которую знает.
     const priceFilter = buildPriceFilter(query.minPrice, query.maxPrice);
     const rows = await this.prisma.listing.findMany({
       where: {
-        code,
+        ...searchWhere,
         sellerId: sellerId ?? undefined,
         status: query.status,
         ...(role === Role.SUPER_ADMIN
@@ -252,7 +269,6 @@ export class ListingsService {
         catalogItem: {
           categoryId: query.categoryId,
           countryId: query.countryId,
-          id: catalogItemIds ? { in: catalogItemIds } : undefined,
         },
       },
       include: adminListingInclude,
@@ -323,14 +339,16 @@ export class ListingsService {
       stemCount: data.stemCount ?? null,
       heightCm: data.heightCm ?? null,
     });
-    const listing = await this.prisma.$transaction(async (tx) => {
-      // price NOT NULL, а считает её только PricingService.recalculate — кладём
-      // себестоимость и сразу пересчитываем.
-      const created = await tx.listing.create({
-        data: { ...data, price: data.costPrice, sellerId },
-      });
-      return this.reloadPriced(tx, created.id);
-    });
+    const listing = await this.prisma
+      .$transaction(async (tx) => {
+        // price NOT NULL, а считает её только PricingService.recalculate — кладём
+        // себестоимость и сразу пересчитываем.
+        const created = await tx.listing.create({
+          data: { ...data, price: data.costPrice, sellerId },
+        });
+        return this.reloadPriced(tx, created.id);
+      })
+      .catch(rethrowSkuTaken);
     await this.cache.bump();
     return this.toAdmin(listing, role);
   }
@@ -356,10 +374,12 @@ export class ListingsService {
     if (dto.heightCm !== undefined) next.heightCm = dto.heightCm;
     await this.assertVariantFree(current.sellerId, catalogItemId, next, id);
 
-    const listing = await this.prisma.$transaction(async (tx) => {
-      await tx.listing.update({ where: { id }, data: dto });
-      return this.reloadPriced(tx, id);
-    });
+    const listing = await this.prisma
+      .$transaction(async (tx) => {
+        await tx.listing.update({ where: { id }, data: dto });
+        return this.reloadPriced(tx, id);
+      })
+      .catch(rethrowSkuTaken);
     await this.cache.bump();
     return this.toAdmin(listing, role);
   }
@@ -439,6 +459,15 @@ export class ListingsService {
       );
     }
   }
+}
+
+// Единственный пользовательский unique у листинга — [sellerId, sku] (id и code
+// генерируются), так что P2002 здесь всегда означает занятый код продавца.
+function rethrowSkuTaken(e: unknown): never {
+  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+    throw new ConflictException('У продавца уже есть позиция с таким кодом');
+  }
+  throw e;
 }
 
 // Своя наценка — рычаг платформы: продавец её не видит и задать не может, даже себе.

@@ -560,6 +560,11 @@ model Listing {
   // поиска. Сквозная последовательность с 10001 (см. миграцию listing_code);
   // показывается как «#10001», в БД — просто число.
   code          Int           @unique @default(autoincrement())
+  // Код продавца: необязательный, вводится руками, чтобы быстро найти позицию в
+  // админке (ищется общим поиском admin/listings). Уникален в пределах продавца
+  // (NULL в Postgres-unique различны — позиции без кода не конфликтуют). Мобилке
+  // не уходит.
+  sku           String?
   sellerId      String
   seller        Seller        @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   catalogItemId String
@@ -597,6 +602,7 @@ model Listing {
   orderItems OrderItem[]
   promotionItems PromotionItem[]
 
+  @@unique([sellerId, sku])
   @@index([sellerId, catalogItemId])
   @@index([status])
   @@index([catalogItemId])
