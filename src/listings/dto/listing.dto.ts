@@ -14,6 +14,7 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
   ValidateIf,
 } from 'class-validator';
@@ -35,6 +36,23 @@ export class CreateListingDto {
   @ApiProperty({ description: 'ID позиции справочника' })
   @IsString()
   catalogItemId: string;
+
+  // Код продавца для поиска в админке. Пустая строка из формы = null («кода нет»):
+  // иначе unique([sellerId, sku]) не пустил бы вторую позицию без кода.
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Код продавца (необязательный, уникален в пределах продавца); null — снять',
+    example: 'R-60-RED',
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() || null : value,
+  )
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  @MaxLength(64)
+  sku?: string | null;
 
   // Розницу (price) руками не задаёт никто — её считает PricingService поверх
   // себестоимости, поэтому в DTO её нет.
@@ -133,7 +151,8 @@ export class UpdateListingDto extends PartialType(
 export class FindListingsQueryDto extends CursorPaginationDto {
   @ApiPropertyOptional({
     description:
-      'Поиск по названию позиции справочника или по артикулу («10001» / «#10001»)',
+      'Поиск по названию позиции справочника или по артикулу («10001» / «#10001»); ' +
+      'в админке — ещё и по коду продавца (sku, подстрока без учёта регистра)',
   })
   @IsOptional()
   @IsString()
