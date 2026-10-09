@@ -57,10 +57,16 @@ export class CreateCatalogItemDto {
   @Type(() => CatalogItemTranslationDto)
   translations: CatalogItemTranslationDto[];
 
-  @ApiPropertyOptional({ description: 'ID категории (необязательна)' })
+  @ApiProperty({ description: 'ID категории товаров (верхний уровень)' })
+  @IsString()
+  categoryId: string;
+
+  @ApiPropertyOptional({
+    description: 'ID подкатегории — дочерней для categoryId (необязательна)',
+  })
   @IsOptional()
   @IsString()
-  categoryId?: string;
+  subcategoryId?: string;
 
   @ApiPropertyOptional({ description: 'ID страны (необязательна)' })
   @IsOptional()
@@ -78,8 +84,9 @@ export class CreateCatalogItemDto {
 
 // Не PartialType/OmitType от CreateCatalogItemDto: @ValidateNested на вложенном
 // массиве переводов ведёт себя неочевидно поверх PartialType (см. category.dto.ts).
-// categoryId принимает явный null — единственный способ снять уже проставленную
-// категорию (отсутствие поля означает «не менять»).
+// subcategoryId/countryId принимают явный null — единственный способ снять уже
+// проставленное значение (отсутствие поля означает «не менять»). categoryId снять
+// нельзя — категория товаров у позиции обязательна.
 export class UpdateCatalogItemDto {
   @ApiPropertyOptional({ type: [CatalogItemTranslationDto] })
   @IsOptional()
@@ -89,13 +96,21 @@ export class UpdateCatalogItemDto {
   translations?: CatalogItemTranslationDto[];
 
   @ApiPropertyOptional({
+    description:
+      'ID категории товаров. При смене подкатегория, не пришедшая в том же запросе, снимается',
+  })
+  @IsOptional()
+  @IsString()
+  categoryId?: string;
+
+  @ApiPropertyOptional({
     nullable: true,
-    description: 'ID категории; null — снять категорию',
+    description: 'ID подкатегории; null — снять подкатегорию',
   })
   @IsOptional()
   @ValidateIf((_, value) => value !== null)
   @IsString()
-  categoryId?: string | null;
+  subcategoryId?: string | null;
 
   @ApiPropertyOptional({
     nullable: true,
@@ -126,10 +141,15 @@ export class FindCatalogQueryDto extends CursorPaginationDto {
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({ description: 'Фильтр по категории' })
+  @ApiPropertyOptional({ description: 'Фильтр по категории товаров' })
   @IsOptional()
   @IsString()
   categoryId?: string;
+
+  @ApiPropertyOptional({ description: 'Фильтр по подкатегории' })
+  @IsOptional()
+  @IsString()
+  subcategoryId?: string;
 
   @ApiPropertyOptional({ description: 'Фильтр по стране' })
   @IsOptional()
@@ -138,12 +158,12 @@ export class FindCatalogQueryDto extends CursorPaginationDto {
 
   @ApiPropertyOptional({
     description:
-      'true — только позиции без категории (categoryId игнорируется)',
+      'true — только позиции без подкатегории (subcategoryId игнорируется)',
   })
   @IsOptional()
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()
-  noCategory?: boolean;
+  noSubcategory?: boolean;
 
   // Только для SUPER_ADMIN — для SELLER игнорируется (видимость считается отдельно).
   @ApiPropertyOptional({ enum: ReviewStatus })

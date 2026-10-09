@@ -11,6 +11,17 @@ const COUNTRIES: { code: string; names: Record<Locale, string> }[] = [
   { code: 'NL', names: { RU: 'Голландия', UZ: 'Gollandiya', EN: 'Netherlands' } },
 ];
 
+// Категории товаров (верхний уровень дерева). code — стабильный ключ для фронта, на
+// каждом окружении одинаковый. На существующих базах houseplants уже создала миграция
+// category_tree — upsert по code её просто находит. Остальные (горшки, удобрения...) и
+// подкатегории заводятся из админки.
+const PRODUCT_CATEGORIES: { code: string; names: Record<Locale, string> }[] = [
+  {
+    code: 'houseplants',
+    names: { RU: 'Комнатные растения', UZ: "Xona o'simliklari", EN: 'Houseplants' },
+  },
+];
+
 async function main() {
   // На проде пароль задаётся через env, дефолт — только для локальной разработки.
   // || а не ??: пустая строка в .env должна падать в дефолт, а не хешироваться.
@@ -50,9 +61,29 @@ async function main() {
     });
   }
 
+  // Тот же приём, что у стран: update: {} — название/иконку/порядок правит супер-админ.
+  for (const [position, { code, names }] of PRODUCT_CATEGORIES.entries()) {
+    await prisma.category.upsert({
+      where: { code },
+      update: {},
+      create: {
+        code,
+        position,
+        translations: {
+          create: (Object.keys(names) as Locale[]).map((locale) => ({
+            locale,
+            name: names[locale],
+            auto: false,
+          })),
+        },
+      },
+    });
+  }
+
   console.log('Seed complete:', {
     admin: admin.email,
     countries: COUNTRIES.length,
+    productCategories: PRODUCT_CATEGORIES.length,
   });
 }
 

@@ -25,9 +25,11 @@ pnpm start:dev
 Swagger `/docs/admin` и `/docs/mobile`, health `GET /health`, Adminer `:8080` (всё `stealth`),
 MinIO-консоль `:9001` (`stealth`/`stealth123`, бакет `catalog` создаёт `minio-init`, чтение
 публичное). Полный список переменных — в `.env.example` (с комментариями), обязательность и
-дефолты — в Joi-схеме. Сид создаёт **только супер-админа** `admin@stealth.local` / `+998900000001`
-(пароль из `SEED_ADMIN_PASSWORD`, дефолт `password123`) — демо-данных нет намеренно, чтобы
-сид можно было гонять на проде. Всё остальное заводится через админку.
+дефолты — в Joi-схеме. Сид создаёт супер-админа `admin@stealth.local` / `+998900000001`
+(пароль из `SEED_ADMIN_PASSWORD`, дефолт `password123`) и справочники — страны и категории
+товаров (`PRODUCT_CATEGORIES`, пока только `houseplants`), идемпотентно по `code` с
+`update: {}`. Демо-данных нет намеренно, чтобы сид можно было гонять на проде. Всё остальное
+заводится через админку.
 
 | Скрипт | Действие |
 |--------|----------|
@@ -59,6 +61,7 @@ src/
                            # telegram-identity.ts (покупатель и staff — разные учётки)
   auth/                    # стратегии и guard'ы: JWT / session / local; email-auth.service.ts — вход по коду на почту
   users/ sellers/ categories/ catalog/ listings/ cart/ addresses/ settings/
+  feed/                    # лента главной мобилки — шов под рекомендательную систему
   app-version/             # версии в сторах для плашки «обновитесь» в мобилке
   pricing/                 # движок цены (price-engine.ts) + PricingService.recalculate,
                            # ступени наценки и приоритеты, полуночный тикер (pricing.scheduler.ts), business-day.ts
@@ -95,6 +98,18 @@ src/
   (`ownerUserId`, unique) — такой же участник, отличается только тем, что не удаляется:
   на нём висит сам продавец (`onDelete: Cascade`). Отдельной модели `SellerMember` нет —
   своих полей у неё не было бы.
+- **Category** — **дерево из двух уровней в одной таблице** (`parentId`, self-relation
+  `CategoryTree`, `Restrict`): `parentId = null` — **категория товаров** (комнатные растения,
+  горшки, услуги…), `parentId` задан — **подкатегория** (у растений — род). Глубину держит
+  сервис (`MAX_CATEGORY_DEPTH = 2` в `categories.service.ts`), не схема. Верхний уровень —
+  только master от `SUPER_ADMIN`, с обязательным уникальным **`code`** (`houseplants`,
+  `/^[a-z][a-z0-9_-]{1,49}$/`) — фронт различает категории по нему, id на каждом окружении
+  свой; там же `iconKey` (иконка плитки, ключ S3) и `position` (порядок плиток). У подкатегорий
+  `code`/иконки нет, продавец предлагает **только подкатегории**. `parentId` после создания не
+  меняется: позиции каталога держат пару `categoryId`/`subcategoryId`, перенос
+  рассинхронизировал бы её. Миграция `20261009120000_category_tree` создала `houseplants`,
+  сделала все прежние категории (роды) её подкатегориями и перевела **все** категории и
+  позиции каталога в master (`sellerId = null`, статусы не трогала).
 - **Category** / **CatalogItem** — общий паттерн владения и ревью:
   `sellerId = null` → **master**, создаёт только `SUPER_ADMIN`, сразу `APPROVED`;
   `sellerId` заполнен → продавец предложил свою, `PENDING` до апрува (`PATCH …/:id/status`).
@@ -103,14 +118,17 @@ src/
   `Category`/`CatalogItem`/`Seller` мультиязычны — название/описание/единица живут не
   колонками на самой сущности, а в отдельных таблицах переводов (`CategoryTranslation`,
   `CatalogItemTranslation`, `SellerTranslation`), см. «Мультиязычность» ниже.
-  `CatalogItem`: `categoryId?` (nullable, `Restrict`), галерея `media: CatalogItemMedia[]`.
+  `CatalogItem`: `categoryId` — категория товаров (**обязательна**, `Restrict`),
+  `subcategoryId?` — её прямой ребёнок (`Restrict`); пару проверяет
+  `CategoriesService.assertUsableForItem`. Смена `categoryId` без `subcategoryId` в том же PATCH
+  снимает подкатегорию. Галерея `media: CatalogItemMedia[]`.
   Общий enum `ReviewStatus`. `freeDelivery: Boolean` —
   вайтлист бесплатной доставки, ставит только `SUPER_ADMIN` (см. «Доставка» ниже).
 - **Country** — страна происхождения товара, платформенный справочник (ближе к
   `PlatformSettings`, чем к `Category`): в отличие от `Category`/`CatalogItem`/`Seller`, у
   неё **нет** `sellerId` и **нет** `ReviewStatus` — продавец страну не предлагает, только
   выбирает из готового списка, заводит и правит список только `SUPER_ADMIN`. `CatalogItem`:
-  `countryId?` (nullable, `Restrict`), симметрично `categoryId`. Название живёт в
+  `countryId?` (nullable, `Restrict`), симметрично `subcategoryId`. Название живёт в
   `CountryTranslation`, тот же инвариант, что у `CategoryTranslation`.
 - **Listing** — предложение продавца поверх позиции: `costPrice` (себестоимость, вводит
   продавец), `price` (розница, **денормализованный результат движка**, руками не пишется —
@@ -277,7 +295,7 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | Роут | Роли | Эндпоинты |
 |---|---|---|
 | `admin/auth` | — | `POST login` (LocalAuthGuard), `POST logout`, `GET me`, `POST telegram/link`, `POST telegram/unlink` |
-| `admin/categories` | SUPER_ADMIN, SELLER | CRUD + `PATCH /:id/status` — **только SUPER_ADMIN** (`@Roles` на хендлере перебивает класс); смена статуса запрещена (409), пока к категории привязана хотя бы одна позиция каталога |
+| `admin/categories` | SUPER_ADMIN, SELLER | CRUD + `PATCH /:id/status` и `POST /:id/icon` — **только SUPER_ADMIN** (`@Roles` на хендлере перебивает класс). Список: `root=true` — верхний уровень по `position`, `parentId` — подкатегории. Без `parentId` создаётся категория товаров (только SUPER_ADMIN, `code` обязателен, дубль → 409); с `parentId` — подкатегория (`code` запрещён). `code`/`position` правит только SUPER_ADMIN. Смена статуса запрещена (409), пока к категории привязана хотя бы одна позиция каталога (на любом уровне) или подкатегория. Иконка — только верхнему уровню, webp до 256px |
 | `admin/countries` | SUPER_ADMIN | CRUD, `DELETE /:id` — 409, пока к стране привязана хотя бы одна позиция каталога. Платформенный справочник — нет ни `sellerId`, ни ревью, роль ровно одна |
 | `admin/catalog` | SUPER_ADMIN, SELLER | CR + `PATCH /:id` (без `DELETE /:id` — удаления нет, только статус; смена статуса запрещена 409, пока по позиции есть хотя бы один листинг), `POST /:id/media`, `DELETE /:id/media/:mediaId`, `PATCH /:id/media/:mediaId/reorder` |
 | `admin/listings` | SELLER, SUPER_ADMIN | CRUD, `sellerId` из пользователя; 409 на дубль варианта. `POST /:id/media`, `DELETE /:id/media/:mediaId`, `PATCH /:id/media/:mediaId/reorder` — своя галерея варианта; ответ несёт `ownMedia` (все статусы) |
@@ -305,7 +323,9 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 | Роут | Guard | Эндпоинты |
 |---|---|---|
 | `mobile/auth` | JwtAuthGuard на `me`/`logout`/`email/link/*` | `POST telegram/session`, `GET telegram/session/:nonce`, `POST telegram/miniapp`, `POST email/session`, `POST email/verify`, `POST email/link/session`, `POST email/link/verify`, `POST refresh`, `GET/PATCH me`, `POST logout` |
-| `mobile/listings`, `mobile/categories`, `mobile/countries`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query. Листинги отдаются **плоским** контрактом (см. «Контракт листинга для мобилки»); `seedling=true` — только ростки (`false`/нет параметра — без фильтра). `mobile/listings` дополнительно принимает `sort` (`newest`\|`price_asc`\|`price_desc`\|`free_delivery`) — опционален, без него — `createdAt desc`. Без sort, `newest` и `free_delivery` сначала отдают акционные (`onPromo`), ценовые сортировки — нет. `free_delivery` — затем позиции с `CatalogItem.freeDelivery`, внутри групп сначала дешёвые; фильтра по доставке нет намеренно (он прятал половину витрины). Опциональный `createdWithinDays` (1..90) — только листинги с `createdAt` за последние N дней, скользящее окно от текущего момента; сортировка при этом обычная. Нужен секции «Новинки недели» (мобилка шлёт `7`); без параметра выдача прежняя — старые сборки его не шлют. Тот же параметр принимает и `admin/listings`. `mobile/countries` отдаёт справочник целиком — фильтра видимости у стран нет |
+| `mobile/feed` | **публичный** | `GET /?cursor&limit` — лента главной: `{ items: FeedItem[], nextCursor }`, `FeedItem = { type: 'listing', id, listing }`. Порядок решает только бэкенд (`src/feed/`, сейчас — дефолтная витрина: акции → новые; дальше — рекомендации). Конверт `type` — чтобы подмешивать другие блоки без смены контракта, клиент пропускает незнакомые `type` |
+| `mobile/categories` | **публичный** | `GET /` без `parentId` — категории товаров (плитки главной, по `position`, с `code`/`iconUrl`), с `parentId` — его подкатегории (по имени); `GET /:code` — категория товаров по `code` (диплинк экрана категории) |
+| `mobile/listings`, `mobile/countries`, `mobile/sellers/:id` | **публичные** | витрина; сервис жёстко фильтрует (`ACTIVE`+`stock>0`, `APPROVED`, `ACTIVE`) и игнорирует `status` из query. Листинги отдаются **плоским** контрактом (см. «Контракт листинга для мобилки»); `seedling=true` — только ростки (`false`/нет параметра — без фильтра). Категория — `categoryCode` (мобилка, экран категории) или `categoryId`, подкатегория — `subcategoryId`. `mobile/listings` дополнительно принимает `sort` (`newest`\|`price_asc`\|`price_desc`\|`free_delivery`) — опционален, без него — `createdAt desc`. Без sort, `newest` и `free_delivery` сначала отдают акционные (`onPromo`), ценовые сортировки — нет. `free_delivery` — затем позиции с `CatalogItem.freeDelivery`, внутри групп сначала дешёвые; фильтра по доставке нет намеренно (он прятал половину витрины). Опциональный `createdWithinDays` (1..90) — только листинги с `createdAt` за последние N дней, скользящее окно от текущего момента; сортировка при этом обычная. Мобилка его больше не шлёт (секция «Новинки недели» удалена), остался для `admin/listings` и старых сборок. `mobile/countries` отдаёт справочник целиком — фильтра видимости у стран нет |
 | `mobile/catalog` | JwtAuthGuard | `GET /` — ⚠️ асимметрия: остальная витрина публичная |
 | `mobile/cart` | JwtAuthGuard | `GET /`, `POST items`, `PATCH/DELETE items/:id`, `DELETE /` |
 | `mobile/favorites` | JwtAuthGuard | `GET /` — `CursorPage<ListingResponse>`, `GET /ids` — `{ listingIds }`, `PUT /:listingId`, `DELETE /:listingId` |
@@ -772,7 +792,7 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 разные хэши на один запрос. Инвалидация — `INCR sf:ver`: O(1), старые ключи становятся
 недостижимы и истекают сами, без SCAN/DEL.
 
-- Кэшируется **только публичная витрина** (`listings`, `listing`, `categories`, `countries`,
+- Кэшируется **только публичная витрина** (`listings`, `listing`, `categories`, `category`, `countries`,
   `catalog`, `seller`, `settings`, `app-version`); админские списки — никогда. Пустой `REDIS_URL` →
   кэш выключен. ⚠️ `app-version` — единственное исключение из правила «локаль в `params`»:
   в кэш кладётся сырая строка со всеми тремя языками заметок, локаль резолвится уже
@@ -810,7 +830,8 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 `FavoritesService` и `CartService` своих include/мапперов не держат — новое поле добавляется
 здесь один раз.
 
-- Ответ **плоский**: артикул `code`, `name`/`unit`/`category { id, name }`/`country { code, name }`/
+- Ответ **плоский**: артикул `code`, `name`/`unit`/`category { id, code, name }` (категория
+  товаров, всегда есть)/`subcategory { id, name } | null`/`country { code, name }`/
   `freeDelivery` каталога лежат рядом с `price`/`oldPrice`/`stock` и атрибутами варианта
   (`seedling`, `potVolumeMl`, `stemCount`, `heightCm` — сырыми, подпись собирает клиент).
   Вложенного `catalogItem`, `sellerId`, `status`, `updatedAt` нет; вместо `status` —
@@ -838,6 +859,11 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 скрипты) → `.rotate()` (EXIF-ориентация применяется до того, как метаданные срежутся) → resize
 1600 `fit: inside` без апскейла → webp q80. EXIF/GPS не сохраняются; расширение и content-type
 берутся из результата конверсии, никогда из `originalname`.
+
+Иконка категории товаров (`POST /admin/categories/:id/icon` → `Category.iconKey`) — тот же
+пайплайн, но `toWebp(buf, { maxSide: 256 })`: это плитка на главной, 1600px мобилке ни к чему.
+Загрузку делает `CategoriesService.uploadIcon` (сначала проверяет, что категория верхнего
+уровня, — иначе в бакете остался бы объект-сирота).
 
 `StorageService` — S3-клиент (`forcePathStyle: true`). ⚠️ **В БД хранится только ключ
 объекта** (`catalog/foo.webp`), не полный URL — `upload()` возвращает и в колонки
@@ -902,7 +928,16 @@ Buckets приватные и публичных URL не дают, а ссыл�
 - витрина без токена: `listings`/`categories`/`sellers` — 200, `catalog`/`cart`/`orders`/
   `notifications` — 401;
 - старый refresh после ротации → 401; сессии админки появляются в таблице `session`;
-- `SELLER`, создавая категорию/позицию каталога, получает `PENDING`, `SUPER_ADMIN` — `APPROVED`;
+- `SELLER`, создавая подкатегорию/позицию каталога, получает `PENDING`, `SUPER_ADMIN` — `APPROVED`;
+  категорию товаров (без `parentId`) `SELLER` создать не может (403), у `SUPER_ADMIN` без `code` → 400,
+  с занятым `code` → 409; подкатегория у подкатегории → 400;
+- позиция каталога: без `categoryId` → 400, `categoryId` подкатегории → 400, `subcategoryId` из
+  чужой категории → 400; `PATCH` со сменой `categoryId` без `subcategoryId` снимает подкатегорию;
+- `GET /mobile/categories` — только верхний уровень по `position` с `iconUrl`;
+  `?parentId=<houseplants>` — роды по имени; `GET /mobile/categories/houseplants` — 200,
+  несуществующий код — 404; `GET /mobile/listings?categoryCode=houseplants` отдаёт то же, что
+  `?categoryId=<id houseplants>`; `GET /mobile/feed` — те же листинги, что `GET /mobile/listings`
+  без параметров, в конвертах `{ type: 'listing', id, listing }`;
 - второй `SELLER` не видит чужую кастомную категорию/позицию и не может сослаться на неё
   в листинге (403);
 - заказ на количество больше `stock` не проходит; отмена возвращает остаток;

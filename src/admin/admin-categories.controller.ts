@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -6,9 +7,19 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ApiBody,
+  ApiConsumes,
+  ApiCookieAuth,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
+import type { Express } from 'express';
 import { Role } from '@prisma/client';
 import { AuthenticatedGuard } from '../auth/guards/authenticated.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -22,9 +33,11 @@ import {
   UpdateCategoryDto,
   UpdateCategoryStatusDto,
 } from '../categories/dto/category.dto';
+import { imageUploadBody, imageUploadOptions } from './upload.options';
 
-// Категории: SUPER_ADMIN управляет master-списком, SELLER может предложить
-// свою (уходит в PENDING до апрува) и пользоваться ей наряду с master.
+// Категории: SUPER_ADMIN управляет master-деревом (категории товаров и подкатегории),
+// SELLER может предложить свою подкатегорию (уходит в PENDING до апрува) и
+// пользоваться ей наряду с master. Категорию верхнего уровня продавец не создаёт.
 @ApiTags('admin/categories')
 @ApiCookieAuth()
 @Controller('admin/categories')
@@ -50,7 +63,7 @@ export class AdminCategoriesController {
   @Post()
   @ApiOperation({
     summary:
-      'Создать категорию (SUPER_ADMIN — сразу master, SELLER — на ревью)',
+      'Создать категорию товаров (без parentId, только SUPER_ADMIN) или подкатегорию (SUPER_ADMIN — сразу master, SELLER — на ревью)',
   })
   create(@Body() dto: CreateCategoryDto, @CurrentUser() user: AuthUser) {
     return this.categories.create(dto, user);
@@ -70,5 +83,21 @@ export class AdminCategoriesController {
   @ApiOperation({ summary: 'Апрув/реджект предложенной категории' })
   updateStatus(@Param('id') id: string, @Body() dto: UpdateCategoryStatusDto) {
     return this.categories.updateStatus(id, dto.status);
+  }
+
+  @Post(':id/icon')
+  @Roles(Role.SUPER_ADMIN)
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Загрузить иконку категории товаров (только верхний уровень)',
+  })
+  @ApiBody(imageUploadBody)
+  @UseInterceptors(FileInterceptor('file', imageUploadOptions))
+  uploadIcon(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException('Файл не передан');
+    return this.categories.uploadIcon(id, file.buffer);
   }
 }

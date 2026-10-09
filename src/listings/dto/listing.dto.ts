@@ -158,10 +158,25 @@ export class FindListingsQueryDto extends CursorPaginationDto {
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({ description: 'Фильтр по категории' })
+  @ApiPropertyOptional({ description: 'Фильтр по категории товаров (id)' })
   @IsOptional()
   @IsString()
   categoryId?: string;
+
+  // Мобилка открывает экран категории по code и шлёт его сразу, не дожидаясь
+  // запроса за id категории.
+  @ApiPropertyOptional({
+    example: 'houseplants',
+    description: 'Фильтр по категории товаров (code)',
+  })
+  @IsOptional()
+  @IsString()
+  categoryCode?: string;
+
+  @ApiPropertyOptional({ description: 'Фильтр по подкатегории' })
+  @IsOptional()
+  @IsString()
+  subcategoryId?: string;
 
   @ApiPropertyOptional({ description: 'Фильтр по стране' })
   @IsOptional()

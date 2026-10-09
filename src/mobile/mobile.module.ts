@@ -6,6 +6,7 @@ import { CategoriesModule } from '../categories/categories.module';
 import { CountriesModule } from '../countries/countries.module';
 import { CatalogModule } from '../catalog/catalog.module';
 import { ListingsModule } from '../listings/listings.module';
+import { FeedModule } from '../feed/feed.module';
 import { CartModule } from '../cart/cart.module';
 import { FavoritesModule } from '../favorites/favorites.module';
 import { OrdersModule } from '../orders/orders.module';
@@ -21,6 +22,7 @@ import { MobileCategoriesController } from './mobile-categories.controller';
 import { MobileCountriesController } from './mobile-countries.controller';
 import { MobileCatalogController } from './mobile-catalog.controller';
 import { MobileListingsController } from './mobile-listings.controller';
+import { MobileFeedController } from './mobile-feed.controller';
 import { MobileCartController } from './mobile-cart.controller';
 import { MobileFavoritesController } from './mobile-favorites.controller';
 import { MobileOrderGroupsController } from './mobile-order-groups.controller';
@@ -40,6 +42,7 @@ import { MobileAppVersionController } from './mobile-app-version.controller';
     CountriesModule,
     CatalogModule,
     ListingsModule,
+    FeedModule,
     CartModule,
     FavoritesModule,
     OrdersModule,
@@ -57,6 +60,7 @@ import { MobileAppVersionController } from './mobile-app-version.controller';
     MobileCountriesController,
     MobileCatalogController,
     MobileListingsController,
+    MobileFeedController,
     MobileCartController,
     MobileFavoritesController,
     MobileOrderGroupsController,
