@@ -228,7 +228,9 @@ export class CategoriesService {
 
   // Уровень категории: 1 — верхний. Идёт вверх по parentId; при MAX_CATEGORY_DEPTH = 2
   // это максимум один лишний запрос.
-  private async depthOf(category: { parentId: string | null }): Promise<number> {
+  private async depthOf(category: {
+    parentId: string | null;
+  }): Promise<number> {
     let depth = 1;
     let parentId = category.parentId;
     while (parentId) {
