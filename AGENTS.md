@@ -32,7 +32,7 @@ MinIO-консоль `:9001` (`stealth`/`stealth123`, бакет `catalog` со�
 | Скрипт | Действие |
 |--------|----------|
 | `start:dev` / `build` / `start:prod` | watch / `prisma generate && nest build` / прод |
-| `start:railway` | `prisma migrate deploy && node dist/main` |
+| `start:railway` | `prisma migrate deploy && node dist/main` (на Railway не используется — см. «Деплой») |
 | `db:up` / `db:down` / `db:studio` | docker-инфраструктура / Prisma Studio |
 | `db:migrate` / `db:deploy` / `db:seed` | миграция в dev / на проде / сид |
 | `prisma:generate` | перегенерировать клиент после правки схемы |
@@ -868,7 +868,17 @@ Redis-кэш переживает редеплой, и без гварда зн�
 
 ## Деплой (Railway)
 
-`railway.json`: билд `pnpm build`, старт `pnpm start:railway`, healthcheck `/health`.
+`railway.json`: билд — `Dockerfile`, старт `sh -c 'prisma migrate deploy && exec node dist/main'`
+(тот же, что `CMD` в Dockerfile, — `startCommand` его перекрывает, правятся оба), healthcheck
+`/health`. **Без pnpm в рантайме**: обёртка висела бы лишним родительским процессом (~50 МБ),
+`exec` отдаёт SIGTERM прямо node. Скрипт `start:railway` остался для ручного запуска.
+
+**Память.** В рантайме `LD_PRELOAD` = **jemalloc** (`libjemalloc2`): на glibc нативная куча
+sharp/libvips фрагментируется по per-thread аренам и в ОС не возвращается — RSS после первой
+загрузки фото залипал с ~300 на ~700 МБ до рестарта. Туда же `sharp.concurrency(1)` +
+`sharp.cache(false)` (`image.service.ts`) и `-threads 2` у ffmpeg (`video.service.ts`): по
+умолчанию оба берут потоки по числу ядер **хоста**, а не контейнера.
+
 Инфраструктура: Railway (сервис + Postgres + Redis) + **Cloudflare R2** для фото — Railway
 Buckets приватные и публичных URL не дают, а ссылка на фото лежит в БД постоянной (presigned
 не подходит). Специфика `NODE_ENV=production` (`src/main.ts`):
