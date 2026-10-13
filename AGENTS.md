@@ -290,7 +290,35 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 
 ## API
 
-Глобального префикса нет. **Админка** — везде `AuthenticatedGuard + RolesGuard`, кроме `auth`:
+Глобального префикса нет.
+
+### Версионирование мобильного API
+
+URI-версии (`app.enableVersioning`, `src/main.ts`), `defaultVersion: VERSION_NEUTRAL` —
+admin, вебхуки и `health` живут без префикса и версий не знают. Мобильные контроллеры
+регистрируются сразу на две версии (`MOBILE_API_VERSIONS`,
+`src/common/decorators/api-version.decorator.ts`):
+
+- **v1** — `/mobile/...` без префикса. **Заморожена** под уже установленные сборки (до дерева
+  категорий): контракт не меняется, новых эндпоинтов не появляется.
+- **v2** — `/v2/mobile/...`, текущая мобилка ходит только сюда. Всё новое и ломающее — здесь.
+
+Хендлер узнаёт версию через `@ApiVer()` (`1 | 2`). Эндпоинт, которого в v1 не было, —
+`@Version('2')` на хендлере (`GET /v2/mobile/categories/:code`) или `version: '2'` на
+контроллере (`mobile/feed`). Расхождения v1 эмулируются **в контроллерах, на выходе сервиса**
+(внутри `cache.wrap` лежит только v2-форма):
+
+- `GET /mobile/categories` → `CategoriesService.findStorefrontLegacy`: плоский список родов
+  (подкатегорий `houseplants`) по имени, `parentId` игнорируется, свой кэш-нэймспейс
+  `categories-v1`;
+- `GET /mobile/listings?categoryId=` → id рода перекладывается в `subcategoryId`;
+- листинг (витрина, деталка, избранное, корзина) → `toLegacyListing`
+  (`src/listings/mobile-listing.ts`): `category` = род `{ id, name } | null`, как до миграции.
+
+Ломающее изменение контракта = правка только в v2 + эмуляция в v1. Когда старые сборки
+вымрут (после подъёма `minSupportedVersion`), v1 и `toLegacyListing` удаляются.
+
+**Админка** — везде `AuthenticatedGuard + RolesGuard`, кроме `auth`:
 
 | Роут | Роли | Эндпоинты |
 |---|---|---|
@@ -373,7 +401,8 @@ params?))` вместо русской строки, `LocalizedExceptionFilter`
 (`POST/GET /mobile/order-groups`, `GET /:id`, `POST /:id/cancel`) — покупателю заказ **это**
 группа, плоских `Order` в ответе нет нигде. Старых `/mobile/orders` (заказ с вложенной группой)
 больше не существует: установки из Play, оставшиеся на прежней версии приложения, перестают
-работать до обновления — решение принято осознанно, экрана «обновите приложение» нет.
+работать до обновления — решение принято осознанно (тогда ещё не было ни экрана «обновите
+приложение», ни версий API; теперь ломающее идёт в v2, см. «Версионирование мобильного API»).
 
 ```
 NEW → CONFIRMED → ASSEMBLING → DELIVERING → ARRIVED → DELIVERED
@@ -846,8 +875,9 @@ passport-сессия, cookie `connect.sid` (`httpOnly`, `sameSite=lax`, `secure
 - Админка получает прежнюю вложенную форму (`listing.response.ts`, `adminListingInclude`)
   плюс атрибуты и `ownMedia`.
 
-Контракт сломан на месте (раньше был вложенный `catalogItem`): бэкенд выкатывается вместе
-с OTA мобилки, после чего поднимается `minSupportedVersion`.
+Контракт ломался на месте (раньше был вложенный `catalogItem`): бэкенд выкатывался вместе
+с OTA мобилки, после чего поднимался `minSupportedVersion`. Так больше не делаем — следующие
+ломающие изменения только в v2, v1 держит форму через `toLegacyListing`.
 
 ## Фото
 
@@ -933,11 +963,16 @@ Buckets приватные и публичных URL не дают, а ссыл�
   с занятым `code` → 409; подкатегория у подкатегории → 400;
 - позиция каталога: без `categoryId` → 400, `categoryId` подкатегории → 400, `subcategoryId` из
   чужой категории → 400; `PATCH` со сменой `categoryId` без `subcategoryId` снимает подкатегорию;
-- `GET /mobile/categories` — только верхний уровень по `position` с `iconUrl`;
-  `?parentId=<houseplants>` — роды по имени; `GET /mobile/categories/houseplants` — 200,
-  несуществующий код — 404; `GET /mobile/listings?categoryCode=houseplants` отдаёт то же, что
-  `?categoryId=<id houseplants>`; `GET /mobile/feed` — те же листинги, что `GET /mobile/listings`
-  без параметров, в конвертах `{ type: 'listing', id, listing }`;
+- `GET /v2/mobile/categories` — только верхний уровень по `position` с `iconUrl`;
+  `?parentId=<houseplants>` — роды по имени; `GET /v2/mobile/categories/houseplants` — 200,
+  несуществующий код — 404; `GET /v2/mobile/listings?categoryCode=houseplants` отдаёт то же, что
+  `?categoryId=<id houseplants>`; `GET /v2/mobile/feed` — те же листинги, что
+  `GET /v2/mobile/listings` без параметров, в конвертах `{ type: 'listing', id, listing }`;
+- v1 (старые сборки): `GET /mobile/categories` — роды плоским списком по имени;
+  `GET /mobile/listings?categoryId=<род>` — листинги рода, в карточке `category` = род
+  `{ id, name }` (без `code`); то же `category` в `/mobile/listings/:id`, `/mobile/favorites`,
+  `/mobile/cart`; `GET /mobile/feed` и `GET /mobile/categories/houseplants` — 404; admin-роуты
+  под `/v2` не отвечают;
 - второй `SELLER` не видит чужую кастомную категорию/позицию и не может сослаться на неё
   в листинге (403);
 - заказ на количество больше `stock` не проходит; отмена возвращает остаток;

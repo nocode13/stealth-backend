@@ -34,6 +34,10 @@ import {
 // этой константы и UI, не модели.
 export const MAX_CATEGORY_DEPTH = 2;
 
+// Категория товаров, чьи подкатегории — прежние плоские категории (роды). Её отдаёт
+// API v1 вместо дерева, см. findStorefrontLegacy.
+const LEGACY_ROOT_CODE = 'houseplants';
+
 // Иконка — плитка на главной мобилки, крупнее 256px ей не нужно.
 const ICON_MAX_SIDE = 256;
 
@@ -133,6 +137,28 @@ export class CategoriesService {
         query.parentId
           ? this.findStorefrontChildren(query, query.parentId, locale)
           : this.findStorefrontRoots(query, locale),
+    );
+    return { ...page, items: page.items.map((c) => this.withIconUrl(c)) };
+  }
+
+  // API v1 (сборки до дерева категорий): плоский список родов по имени — тогда
+  // категория и была родом. После миграции category_tree роды — подкатегории
+  // LEGACY_ROOT_CODE; parentId из query здесь не учитывается.
+  async findStorefrontLegacy(
+    query: FindCategoriesQueryDto,
+    locale: Locale,
+  ): Promise<CursorPage<CategoryResponse>> {
+    const page = await this.cache.wrap(
+      'categories-v1',
+      { ...query, locale },
+      async () => {
+        const root = await this.prisma.category.findUnique({
+          where: { code: LEGACY_ROOT_CODE },
+          select: { id: true },
+        });
+        if (!root) return { items: [], nextCursor: null };
+        return this.findStorefrontChildren(query, root.id, locale);
+      },
     );
     return { ...page, items: page.items.map((c) => this.withIconUrl(c)) };
   }

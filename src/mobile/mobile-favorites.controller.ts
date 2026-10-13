@@ -14,23 +14,34 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ReqLocale } from '../common/decorators/locale.decorator';
 import { CursorPaginationDto } from '../common/dto/pagination.dto';
+import {
+  ApiVer,
+  MOBILE_API_VERSIONS,
+} from '../common/decorators/api-version.decorator';
+import type { ApiVersion } from '../common/decorators/api-version.decorator';
+import { toLegacyListing } from '../listings/mobile-listing';
 
 // Избранное мобилки: целиком под JWT — гостевого избранного нет.
 @ApiTags('mobile/favorites')
 @ApiBearerAuth()
-@Controller('mobile/favorites')
+@Controller({ path: 'mobile/favorites', version: MOBILE_API_VERSIONS })
 @UseGuards(JwtAuthGuard)
 export class MobileFavoritesController {
   constructor(private readonly favorites: FavoritesService) {}
 
   @Get()
   @ApiOperation({ summary: 'Избранные листинги текущего пользователя' })
-  list(
+  async list(
     @CurrentUser('id') userId: string,
     @Query() query: CursorPaginationDto,
     @ReqLocale() locale: Locale,
+    @ApiVer() ver: ApiVersion,
   ) {
-    return this.favorites.list(userId, query, locale);
+    const page = await this.favorites.list(userId, query, locale);
+    // v1: `category` — род (см. toLegacyListing).
+    return ver === 2
+      ? page
+      : { ...page, items: page.items.map(toLegacyListing) };
   }
 
   @Get('ids')

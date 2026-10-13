@@ -169,6 +169,17 @@ export function toListingDetail(
   };
 }
 
+/**
+ * API v1 (сборки до дерева категорий): там `category` — род, `{ id, name } | null`.
+ * Миграция category_tree унесла род в `subcategory`, а в `category` положила категорию
+ * товаров — v1 получает род на прежнем месте. Зовётся в контроллерах mobile/ на выходе
+ * сервиса: внутри cache.wrap лежит только v2-форма.
+ */
+export const toLegacyListing = <T extends ListingCardResponse>(l: T) => ({
+  ...l,
+  category: l.subcategory,
+});
+
 export const toCartListing = (
   l: MobileListingRow,
   locale: Locale,
