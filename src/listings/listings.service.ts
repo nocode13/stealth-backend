@@ -188,6 +188,10 @@ export class ListingsService {
             seedling: query.seedling ? true : undefined,
             catalogItem: {
               categoryId: query.categoryId,
+              category: query.categoryCode
+                ? { code: query.categoryCode }
+                : undefined,
+              subcategoryId: query.subcategoryId,
               countryId: query.countryId,
               id: catalogItemIds ? { in: catalogItemIds } : undefined,
             },
@@ -268,6 +272,7 @@ export class ListingsService {
         seedling: query.seedling ? true : undefined,
         catalogItem: {
           categoryId: query.categoryId,
+          subcategoryId: query.subcategoryId,
           countryId: query.countryId,
         },
       },

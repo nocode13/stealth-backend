@@ -5,11 +5,12 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CatalogService } from '../catalog/catalog.service';
 import { FindCatalogQueryDto } from '../catalog/dto/catalog.dto';
 import { ReqLocale } from '../common/decorators/locale.decorator';
+import { MOBILE_API_VERSIONS } from '../common/decorators/api-version.decorator';
 
 // Просмотр справочника из мобилки (защищено JWT).
 @ApiTags('mobile/catalog')
 @ApiBearerAuth()
-@Controller('mobile/catalog')
+@Controller({ path: 'mobile/catalog', version: MOBILE_API_VERSIONS })
 @UseGuards(JwtAuthGuard)
 export class MobileCatalogController {
   constructor(private readonly catalog: CatalogService) {}

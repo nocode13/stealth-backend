@@ -1,5 +1,6 @@
 import { ListingStatus, Locale, Prisma } from '@prisma/client';
 import { pickTranslation } from '../i18n/pick';
+import { CategoryRef, toCategoryRef } from '../categories/category.response';
 import {
   ListingPromotionResponse,
   toListingPromotionResponse,
@@ -28,6 +29,7 @@ export const mobileListingInclude = {
     include: {
       translations: true,
       category: { include: { translations: true } },
+      subcategory: { include: { translations: true } },
       country: { include: { translations: true } },
       media: readyMedia,
     },
@@ -58,7 +60,10 @@ export interface ListingCardResponse extends VariantFields {
   /** ACTIVE и есть остаток. Витрина отдаёт только такие; избранному — нет. */
   available: boolean;
   freeDelivery: boolean;
-  category: { id: string; name: string } | null;
+  /** Категория товаров: code — ключ, по которому фронт различает категории. */
+  category: CategoryRef;
+  /** Подкатегория (у растений — род); бейдж карточки. */
+  subcategory: { id: string; name: string } | null;
   country: { code: string; name: string } | null;
   media: MediaResponse[];
   createdAt: Date;
@@ -128,10 +133,11 @@ export function toListingCard(
     stock: l.stock,
     available: l.status === ListingStatus.ACTIVE && l.stock > 0,
     freeDelivery: item.freeDelivery,
-    category: item.category
+    category: toCategoryRef(item.category, locale),
+    subcategory: item.subcategory
       ? {
-          id: item.category.id,
-          name: pickTranslation(item.category.translations, locale).name,
+          id: item.subcategory.id,
+          name: pickTranslation(item.subcategory.translations, locale).name,
         }
       : null,
     country: item.country
@@ -162,6 +168,17 @@ export function toListingDetail(
     variants,
   };
 }
+
+/**
+ * API v1 (сборки до дерева категорий): там `category` — род, `{ id, name } | null`.
+ * Миграция category_tree унесла род в `subcategory`, а в `category` положила категорию
+ * товаров — v1 получает род на прежнем месте. Зовётся в контроллерах mobile/ на выходе
+ * сервиса: внутри cache.wrap лежит только v2-форма.
+ */
+export const toLegacyListing = <T extends ListingCardResponse>(l: T) => ({
+  ...l,
+  category: l.subcategory,
+});
 
 export const toCartListing = (
   l: MobileListingRow,

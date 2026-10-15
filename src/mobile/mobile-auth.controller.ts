@@ -23,11 +23,12 @@ import { TelegramAuthService } from '../telegram/telegram-auth.service';
 import { UsersService } from '../users/users.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ReqLocale } from '../common/decorators/locale.decorator';
+import { MOBILE_API_VERSIONS } from '../common/decorators/api-version.decorator';
 
 // Аутентификация мобилки: вход через Telegram или по коду на почту (Resend),
 // access + refresh токены.
 @ApiTags('mobile/auth')
-@Controller('mobile/auth')
+@Controller({ path: 'mobile/auth', version: MOBILE_API_VERSIONS })
 export class MobileAuthController {
   constructor(
     private readonly auth: AuthService,

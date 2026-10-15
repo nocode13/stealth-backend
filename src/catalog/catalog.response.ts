@@ -1,10 +1,7 @@
 import { CatalogItemMedia, Locale, Prisma, ReviewStatus } from '@prisma/client';
 import { pickTranslation } from '../i18n/pick';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '../i18n/locale';
-import {
-  CategoryResponse,
-  toCategoryResponse,
-} from '../categories/category.response';
+import { CategoryRef, toCategoryRef } from '../categories/category.response';
 import {
   CountryResponse,
   toCountryResponse,
@@ -14,6 +11,7 @@ export type CatalogItemWithTranslations = Prisma.CatalogItemGetPayload<{
   include: {
     translations: true;
     category: { include: { translations: true } };
+    subcategory: { include: { translations: true } };
     country: { include: { translations: true } };
     media: true;
   };
@@ -24,8 +22,11 @@ export interface CatalogItemResponse {
   name: string;
   description: string | null;
   unit: string;
-  categoryId: string | null;
-  category: CategoryResponse | null;
+  categoryId: string;
+  /** Категория товаров (верхний уровень) — обязательна. */
+  category: CategoryRef;
+  subcategoryId: string | null;
+  subcategory: CategoryRef | null;
   countryId: string | null;
   country: CountryResponse | null;
   media: CatalogItemMedia[];
@@ -59,7 +60,11 @@ export const toCatalogItemResponse = (
     description: t.description,
     unit: t.unit,
     categoryId: item.categoryId,
-    category: item.category ? toCategoryResponse(item.category, locale) : null,
+    category: toCategoryRef(item.category, locale),
+    subcategoryId: item.subcategoryId,
+    subcategory: item.subcategory
+      ? toCategoryRef(item.subcategory, locale)
+      : null,
     countryId: item.countryId,
     country: item.country ? toCountryResponse(item.country, locale) : null,
     // media отдаём как есть (в БД ключи S3) — полные URL навешивает withMediaUrls

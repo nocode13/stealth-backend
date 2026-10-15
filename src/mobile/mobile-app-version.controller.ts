@@ -5,12 +5,13 @@ import { ReqLocale } from '../common/decorators/locale.decorator';
 import { AppVersionService } from '../app-version/app-version.service';
 import type { AppVersionCheck } from '../app-version/app-version.service';
 import { CheckAppVersionQueryDto } from '../app-version/dto/app-version.dto';
+import { MOBILE_API_VERSIONS } from '../common/decorators/api-version.decorator';
 
 // Версия в сторе для плашки «обновитесь». Публичный эндпоинт — как остальная витрина:
 // force-update обязан работать и для неавторизованной установки, иначе застрявший на
 // старой версии пользователь не увидит экран, пока не залогинится.
 @ApiTags('mobile/app-version')
-@Controller('mobile/app-version')
+@Controller({ path: 'mobile/app-version', version: MOBILE_API_VERSIONS })
 export class MobileAppVersionController {
   constructor(private readonly appVersion: AppVersionService) {}
 
