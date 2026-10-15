@@ -1,7 +1,11 @@
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { ValidationPipe } from '@nestjs/common';
+import {
+  ValidationPipe,
+  VERSION_NEUTRAL,
+  VersioningType,
+} from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import session from 'express-session';
 import passport from 'passport';
@@ -21,6 +25,13 @@ async function bootstrap() {
   if (isProd) {
     app.set('trust proxy', 1);
   }
+
+  // URI-версии: по умолчанию роут без префикса (admin, вебхуки, health), mobile/ живёт
+  // ещё и под /v2 — см. MOBILE_API_VERSIONS.
+  app.enableVersioning({
+    type: VersioningType.URI,
+    defaultVersion: VERSION_NEUTRAL,
+  });
 
   // Валидация DTO глобально.
   app.useGlobalPipes(

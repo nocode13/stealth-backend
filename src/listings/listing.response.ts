@@ -26,6 +26,7 @@ export const adminListingInclude = {
     include: {
       translations: true,
       category: { include: { translations: true } },
+      subcategory: { include: { translations: true } },
       country: { include: { translations: true } },
       media: readyMedia,
     },

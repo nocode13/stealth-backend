@@ -314,22 +314,38 @@ model SellerTranslation {
   @@map("seller_translations")
 }
 
-// Категории каталога: master (sellerId = null, создаёт SUPER_ADMIN, сразу APPROVED)
-// и кастомные, предложенные продавцом (sellerId заполнен, уходят в PENDING до апрува
-// SUPER_ADMIN'ом и видны/доступны для использования только этому продавцу).
+// Категории каталога — дерево из двух уровней в одной таблице:
+// - parentId = null → категория товаров (комнатные растения, горшки, услуги...). Только
+//   master (создаёт SUPER_ADMIN), обязательно со стабильным code — по нему фронт различает
+//   категории, id для этого не годится (на каждом окружении свой);
+// - parentId задан → подкатегория (у растений — род). Родитель обязан быть верхнего уровня.
+//   Тот же паттерн ревью, что и раньше: master (sellerId = null, сразу APPROVED) или
+//   предложенная продавцом (sellerId заполнен, PENDING до апрува SUPER_ADMIN'ом).
+// Глубину ограничивает сервис (MAX_CATEGORY_DEPTH), не схема.
 model Category {
-  id           String                @id @default(cuid())
-  translations CategoryTranslation[]
-  sellerId     String?
-  seller       Seller?               @relation(fields: [sellerId], references: [id], onDelete: Cascade)
-  status       ReviewStatus          @default(APPROVED)
-  catalogItems CatalogItem[]
-  createdAt    DateTime              @default(now())
-  updatedAt    DateTime              @updatedAt
+  id              String                @id @default(cuid())
+  translations    CategoryTranslation[]
+  parentId        String?
+  parent          Category?             @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children        Category[]            @relation("CategoryTree")
+  /// Стабильный ключ категории товаров для фронта (houseplants, pots...). Только у верхнего уровня.
+  code            String?               @unique
+  /// Ключ S3-объекта иконки (не URL) — как Seller.bannerUrl. Только у верхнего уровня.
+  iconKey         String?
+  /// Порядок плиток на главной мобилки (по возрастанию, затем id).
+  position        Int                   @default(0)
+  sellerId        String?
+  seller          Seller?               @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  status          ReviewStatus          @default(APPROVED)
+  catalogItems    CatalogItem[]         @relation("CatalogItemCategory")
+  subcatalogItems CatalogItem[]         @relation("CatalogItemSubcategory")
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
 
   @@index([sellerId])
   @@index([status])
   @@index([createdAt])
+  @@index([parentId, position])
   @@map("categories")
 }
 
@@ -389,30 +405,34 @@ model CountryTranslation {
 // Справочник цветов — master-список (sellerId = null, создаёт SUPER_ADMIN) плюс
 // кастомные позиции, предложенные продавцом (тот же паттерн ревью, что и Category).
 model CatalogItem {
-  id           String                   @id @default(cuid())
-  translations CatalogItemTranslation[]
-  // Категория необязательна: позицию можно завести до того, как категория придумана
-  // или одобрена, и снять её позже (PATCH с categoryId: null).
-  categoryId   String?
-  category     Category?                @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  // Страна необязательна — как и категория: позицию можно завести до того, как
-  // страна заведена, и снять её позже (PATCH с countryId: null).
-  countryId    String?
-  country      Country?                 @relation(fields: [countryId], references: [id], onDelete: Restrict)
-  media        CatalogItemMedia[]
-  sellerId     String?
-  seller       Seller?                  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
-  status       ReviewStatus             @default(APPROVED)
-  listings     Listing[]
+  id            String                   @id @default(cuid())
+  translations  CatalogItemTranslation[]
+  // Категория товаров (верхний уровень) обязательна — без неё позиция не попала бы ни в
+  // одну плитку главной. Подкатегория необязательна (у горшков её может не быть вовсе) и
+  // обязана быть дочерней для categoryId — это проверяет CategoriesService.
+  categoryId    String
+  category      Category                 @relation("CatalogItemCategory", fields: [categoryId], references: [id], onDelete: Restrict)
+  subcategoryId String?
+  subcategory   Category?                @relation("CatalogItemSubcategory", fields: [subcategoryId], references: [id], onDelete: Restrict)
+  // Страна необязательна: позицию можно завести до того, как страна заведена, и
+  // снять её позже (PATCH с countryId: null).
+  countryId     String?
+  country       Country?                 @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  media         CatalogItemMedia[]
+  sellerId      String?
+  seller        Seller?                  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  status        ReviewStatus             @default(APPROVED)
+  listings      Listing[]
   /// Позиция из вайтлиста бесплатной доставки. Ставит только SUPER_ADMIN: флаг стоит
   /// платформе денег. Корзина едет бесплатно, только если ВСЕ её позиции с этим флагом.
-  freeDelivery Boolean                  @default(false)
-  createdAt    DateTime                 @default(now())
-  updatedAt    DateTime                 @updatedAt
+  freeDelivery  Boolean                  @default(false)
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
 
   @@index([sellerId])
   @@index([status])
   @@index([categoryId])
+  @@index([subcategoryId])
   @@index([countryId])
   @@index([createdAt])
   @@map("catalog")

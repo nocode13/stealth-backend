@@ -28,8 +28,12 @@ export interface ProcessedImage {
 @Injectable()
 export class ImageService {
   // Перекодирует загруженный файл в WebP. Кропа и апскейла нет: fit 'inside'
-  // вписывает в квадрат MAX_SIDE, сохраняя пропорции.
-  async toWebp(input: Buffer): Promise<ProcessedImage> {
+  // вписывает в квадрат maxSide, сохраняя пропорции. maxSide меньше дефолта — для
+  // мелких картинок (иконки категорий), чтобы мобилка не качала 1600px ради плитки.
+  async toWebp(
+    input: Buffer,
+    { maxSide = MAX_SIDE }: { maxSide?: number } = {},
+  ): Promise<ProcessedImage> {
     const pipeline = sharp(input, { failOn: 'error' });
 
     let format: string | undefined;
@@ -47,8 +51,8 @@ export class ImageService {
       // иначе фото с телефона ляжет боком.
       .rotate()
       .resize({
-        width: MAX_SIDE,
-        height: MAX_SIDE,
+        width: maxSide,
+        height: maxSide,
         fit: 'inside',
         withoutEnlargement: true,
       })
