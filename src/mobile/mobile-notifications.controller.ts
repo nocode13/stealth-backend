@@ -20,12 +20,13 @@ import {
 } from '../notifications/dto/notification.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PushTokensService } from '../push/push-tokens.service';
+import { MOBILE_API_VERSIONS } from '../common/decorators/api-version.decorator';
 
 // Лента уведомлений мобилки: целиком под JWT, как MobileCartController —
 // уведомления всегда персональные, гостевого доступа нет.
 @ApiTags('mobile/notifications')
 @ApiBearerAuth()
-@Controller('mobile/notifications')
+@Controller({ path: 'mobile/notifications', version: MOBILE_API_VERSIONS })
 @UseGuards(JwtAuthGuard)
 export class MobileNotificationsController {
   constructor(

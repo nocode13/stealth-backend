@@ -20,13 +20,14 @@ import {
 import { toOrderGroupResponse } from '../orders/order.response';
 import { OrdersService } from '../orders/orders.service';
 import { StorageService } from '../storage/storage.service';
+import { MOBILE_API_VERSIONS } from '../common/decorators/api-version.decorator';
 
 // Заказ покупателя — это группа: чекаут может резаться на несколько Order по
 // продавцам, но для мобилки это одна доставка по одному адресу. Плоских
 // /mobile/orders больше нет (см. AGENTS.md «Заказы»).
 @ApiTags('mobile/order-groups')
 @ApiBearerAuth()
-@Controller('mobile/order-groups')
+@Controller({ path: 'mobile/order-groups', version: MOBILE_API_VERSIONS })
 @UseGuards(JwtAuthGuard)
 export class MobileOrderGroupsController {
   constructor(

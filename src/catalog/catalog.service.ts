@@ -43,6 +43,7 @@ import {
 const withCategory = {
   translations: true,
   category: { include: { translations: true } },
+  subcategory: { include: { translations: true } },
   country: { include: { translations: true } },
   media: { orderBy: { sortOrder: 'asc' } },
   // Счётчик продажных позиций: админка дизейблит по нему селект статуса.
@@ -55,6 +56,7 @@ const withCategory = {
 export const withCategoryPublic = {
   translations: true,
   category: { include: { translations: true } },
+  subcategory: { include: { translations: true } },
   country: { include: { translations: true } },
   media: {
     where: { status: MediaStatus.READY },
@@ -96,7 +98,8 @@ export class CatalogService {
             locale,
             catalogItem: {
               status: ReviewStatus.APPROVED,
-              categoryId: query.noCategory ? null : query.categoryId,
+              categoryId: query.categoryId,
+              subcategoryId: query.noSubcategory ? null : query.subcategoryId,
               countryId: query.countryId,
               ...(query.search
                 ? {
@@ -137,7 +140,8 @@ export class CatalogService {
     const isSuperAdmin = user.role === Role.SUPER_ADMIN;
     const locale = DEFAULT_LOCALE;
     const itemWhere: Prisma.CatalogItemWhereInput = {
-      categoryId: query.noCategory ? null : query.categoryId,
+      categoryId: query.categoryId,
+      subcategoryId: query.noSubcategory ? null : query.subcategoryId,
       countryId: query.countryId,
       freeDelivery: query.freeDelivery ? true : undefined,
       ...(query.search
@@ -188,9 +192,11 @@ export class CatalogService {
     dto: CreateCatalogItemDto,
     user: AuthUser,
   ): Promise<AdminCatalogItemResponse> {
-    if (dto.categoryId) {
-      await this.categories.assertUsable(dto.categoryId, user);
-    }
+    await this.categories.assertUsableForItem(
+      dto.categoryId,
+      dto.subcategoryId,
+      user,
+    );
     if (dto.countryId) {
       await this.countries.assertUsable(dto.countryId);
     }
@@ -203,6 +209,7 @@ export class CatalogService {
     const created = await this.prisma.catalogItem.create({
       data: {
         categoryId: dto.categoryId,
+        subcategoryId: dto.subcategoryId,
         countryId: dto.countryId,
         freeDelivery: dto.freeDelivery,
         sellerId: isSuperAdmin ? null : user.sellerId,
@@ -229,11 +236,26 @@ export class CatalogService {
     }
     // Продавец не должен назначать себе бесплатную доставку за счёт платформы.
     if (user.role !== Role.SUPER_ADMIN) delete dto.freeDelivery;
-    if (dto.categoryId) {
-      await this.categories.assertUsable(dto.categoryId, user);
+    // Пара категорий проверяется целиком, если меняется хоть одна из них. Сменили
+    // категорию без подкатегории — старая подкатегория чужому родителю не подходит,
+    // снимаем её; явный subcategoryId в том же запросе проверяется как есть.
+    const categoryChanged =
+      dto.categoryId !== undefined && dto.categoryId !== item.categoryId;
+    const subcategoryId =
+      dto.subcategoryId !== undefined
+        ? dto.subcategoryId
+        : categoryChanged
+          ? null
+          : undefined;
+    if (dto.categoryId !== undefined || subcategoryId !== undefined) {
+      await this.categories.assertUsableForItem(
+        dto.categoryId ?? item.categoryId,
+        subcategoryId ?? null,
+        user,
+      );
     }
     // if (dto.countryId), а не !== undefined: при null проверять нечего, а в data
-    // null должен доехать и снять страну (так же сделано для categoryId).
+    // null должен доехать и снять страну (так же сделано для subcategoryId).
     if (dto.countryId) {
       await this.countries.assertUsable(dto.countryId);
     }
@@ -260,6 +282,7 @@ export class CatalogService {
         where: { id },
         data: {
           categoryId: dto.categoryId,
+          subcategoryId,
           countryId: dto.countryId,
           freeDelivery: dto.freeDelivery,
           status: dto.status,

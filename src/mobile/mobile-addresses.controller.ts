@@ -16,11 +16,12 @@ import {
 } from '../addresses/dto/address.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { MOBILE_API_VERSIONS } from '../common/decorators/api-version.decorator';
 
 // Адресная книга мобилки: целиком под JWT — гостевой адресной книги нет.
 @ApiTags('mobile/addresses')
 @ApiBearerAuth()
-@Controller('mobile/addresses')
+@Controller({ path: 'mobile/addresses', version: MOBILE_API_VERSIONS })
 @UseGuards(JwtAuthGuard)
 export class MobileAddressesController {
   constructor(private readonly addresses: AddressesService) {}
